@@ -1,0 +1,16 @@
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+.vscode/
+.cache/
+
+sdkconfig.local
+server/recordings/
+server/*.exe
+
+agent/.env
+__pycache__/
+
+# Script locale con token di autenticazione
+claude.ps1

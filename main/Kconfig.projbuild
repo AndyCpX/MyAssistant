@@ -1,0 +1,41 @@
+menu "Smart Speaker"
+
+    config SS_WIFI_SSID
+        string "Wi-Fi SSID"
+        default ""
+        help
+            Lascia vuoto per disabilitare Wi-Fi e streaming (la wake word funziona comunque).
+            Meglio impostarlo in sdkconfig.local (non versionato).
+
+    config SS_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default ""
+
+    config SS_SENTIMENT_URL
+        string "URL del servizio sentiment"
+        default "http://<IP-agente>:8080/v1/utterance"
+
+    config SS_AUTH_TOKEN
+        string "Bearer token per il servizio (vuoto = nessuno)"
+        default ""
+
+    config SS_VOLUME
+        int "Volume dello speaker (0-100)"
+        range 0 100
+        default 70
+        help
+            Valori alti saturano l'amplificatore e distorcono la voce.
+
+    config SS_END_SILENCE_MS
+        int "Pausa che chiude lo stream (ms)"
+        default 500
+
+    config SS_WAIT_SPEECH_MS
+        int "Attesa massima dell'inizio del parlato dopo la wake word (ms)"
+        default 5000
+
+    config SS_MAX_UTTERANCE_MS
+        int "Durata massima dello stream (ms)"
+        default 10000
+
+endmenu

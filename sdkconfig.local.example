@@ -1,0 +1,5 @@
+# Copia come sdkconfig.local (non versionato), poi: del sdkconfig; idf.py reconfigure
+CONFIG_SS_WIFI_SSID="NOME_RETE"
+CONFIG_SS_WIFI_PASSWORD="PASSWORD"
+CONFIG_SS_SENTIMENT_URL="http://<IP-agente>:8080/v1/utterance"
+CONFIG_SS_AUTH_TOKEN=""
