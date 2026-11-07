@@ -155,3 +155,29 @@ Regola aggiunta: `POST /api/services/cover/(open_cover|close_cover|stop_cover|se
 ("MINI-RBS", stato open), senza tipo. La regola filtra il **servizio**, non l'entità: in Home Assistant anche garage e cancelli sono
 `cover`. Mitigazione solo nelle istruzioni (non agire su garage, cancelli, porte), quindi non è un blocco duro. Per un blocco duro servirebbe
 restringere le entità (non supportato oggi: le regole guardano solo metodo e percorso). Nessuna azione eseguita sulle tapparelle reali.
+
+### Switch trattati come luci (2026-11-07)
+In questa casa quasi tutte le luci sono entità `switch.` (non `light.`). Letti i 55 switch reali: le luci vere hanno `device_class` vuoto
+(null); il rumore ha `device_class: switch` (Echo: do_not_disturb, shuffle, repeat; "Automation: ..."). Regola nelle istruzioni di
+`skill.local.yaml`: sono luci tutte le `light.` e le `switch.` con device_class null; gli altri si ignorano e l'utente non sente mai
+parlare di "switch". I filtri jq sono esatti e da non modificare se non nel nome cercato. Le luci switch sono solo accese/spente
+(`brightness_pct` vale solo per `light.`). Limite del risultato dei comandi alzato a 3000 caratteri (`SKILL_MAX_RESULT_CHARS`).
+Verificato in lettura: "quali luci sono accese?" (5 switch accesi), "quante luci ci sono?" (32), "la luce della cucina è accesa?", richiesta ambigua
+("è accesa la luce?" chiede quale). Limite: un futuro switch con device_class null che non sia una luce (es. una presa) verrebbe contato come luce.
+Nota di test: con `curl` da Git Bash le lettere accentate nel JSON inline possono dare "error parsing the body"; usare `--data-binary @file`.
+
+### "Spegni tutte le luci" e il limite di Netatmo (2026-11-07)
+Sintomo: "spegni tutte le luci" non spegneva tutte le luci. Cause trovate:
+1. **Metodo fragile**: `light` e `switch` sono domini diversi e `curl` non ha cicli; l'LLM doveva comporre più chiamate. Sostituito dallo script
+   `skills/homeassistant-skill/local/luci.py` (nostro, stdlib, in `commands.scripts`): `luci.py on|off [--match testo] [--dry-run]`. Trova le luci
+   (light.* e switch.* senza device_class), agisce solo su quelle che cambiano davvero, una chiamata per dominio con la lista di entità, aspetta 1,5 s,
+   verifica gli stati e risponde con JSON (`trovate`, `nomi`, `cambiate`, `non_cambiate`, `non_rispondono`, `interrotto`). Solo turn_on/turn_off,
+   solo verso `HA_URL`, senza proxy né redirect, token mai stampato.
+2. **Causa vera, esterna**: molte luci "Luce …" sono dispositivi Netatmo; Home Assistant risponde **500** a `switch/turn_off` perché l'API cloud
+   di Netatmo risponde **429 "API limit exceeded"** (`/api/setstate`, letto nel log di errori di Home Assistant). Il faro del giardino (Sonoff, locale)
+   si spegne. Una richiesta con una lista fallisce per intero se anche una sola entità fallisce.
+3. **Ripiego gentile**: se la chiamata cumulativa fallisce, una luce alla volta con pausa di 0,4 s e stop dopo due fallimenti di fila, per non
+   consumare altro limite cloud. L'agente riferisce le luci rimaste accese e suggerisce di riprovare fra qualche minuto; non ripete da solo.
+Il limite era ancora attivo dopo oltre un minuto: lo scambio con Netatmo non dipende da questo progetto. Possibili rimedi: attendere il reset del limite,
+o controllare l'integrazione Netatmo in Home Assistant (limite dell'applicazione condivisa o dell'utente; cercare 429 nel log).
+Verificato con comando reale: la risposta vocale è "ho provato a spegnere le luci, ma … non rispondono, riprova tra qualche minuto".

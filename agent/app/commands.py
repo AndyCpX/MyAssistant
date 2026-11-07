@@ -29,7 +29,7 @@ log = logging.getLogger("commands")
 
 TIMEOUT_S = float(os.getenv("SKILL_CMD_TIMEOUT_S", "10"))
 MAX_OUT = 64 * 1024
-MAX_RESULT_CHARS = int(os.getenv("SKILL_MAX_RESULT_CHARS", "1500"))
+MAX_RESULT_CHARS = int(os.getenv("SKILL_MAX_RESULT_CHARS", "3000"))
 SAFE_PATH = "/usr/local/bin:/usr/bin:/bin"
 UID = GID = int(os.getenv("SKILL_CMD_UID", "65534"))   # nobody
 

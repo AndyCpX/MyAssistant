@@ -1,6 +1,8 @@
 # Update Log
 
 ## 2026-11-07
+- **Update**: [skills](/agent/skills.md): luci.py per accendere/spegnere le luci in una chiamata; causa di "spegni tutte" trovata nel limite 429 di Netatmo.
+- **Update**: [skills](/agent/skills.md): gli switch senza device_class sono trattati come luci in Home Assistant; letture verificate.
 - **Update**: [skills](/agent/skills.md): tapparelle (cover) abilitate per Home Assistant con servizi limitati; elenco reale letto, nessuna azione eseguita.
 - **Update**: [skills](/agent/skills.md): curl abilitato per Home Assistant con allowed_paths, solo GET e POST, domini esclusi e blocco duro; solo letture provate sulla casa reale.
 - **Update**: [skills](/agent/skills.md): skill.local.yaml, commands.scripts e filtro_jq; skill Home Assistant in sola lettura provata con "elenca tutte le luci".
