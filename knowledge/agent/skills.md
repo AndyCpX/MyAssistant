@@ -107,3 +107,51 @@ http/https; vietati `-o/-O/-T/-x/-F/-L/-b/-c/-D/-v/-K`, `--proxy`, `--resolve`, 
 - Tipo `mcp`; `confirm: true` (accettato, ignorato con avviso).
 - Script allegati alla skill (`scripts/`): oggi si eseguono solo gli eseguibili di sistema in `allow`.
 - Tool `http` provato solo con un server di prova, non con un servizio reale.
+
+## Skill di terzi: script, filtro jq e skill.local.yaml (2026-11-07)
+Provate con `anotb/homeassistant-skill` (formato standard, pensata per agenti con shell). Tre estensioni:
+- **`skill.local.yaml`** nella cartella della skill: chiavi che sovrascrivono il frontmatter (`description`, `triggers`, `requires_env`,
+  `commands`) e `instructions`, che sostituisce il corpo di SKILL.md. Serve per adattare una skill di terzi (descrizione e istruzioni
+  in italiano per la voce) senza modificare i suoi file, che un aggiornamento sovrascriverebbe. Attenzione: in YAML una descrizione
+  con `: ` va messa tra virgolette, altrimenti la skill risulta disattivata con `ScannerError`.
+- **`commands.scripts`**: elenco di script `.py` dentro la cartella della skill. Si lanciano per nome (`scripts/ha_read.py get ...`),
+  eseguiti con `python -I` come `nobody`. È diverso da ammettere `python3`, che con argomenti liberi equivarrebbe a codice arbitrario.
+  Gli script vanno letti prima di abilitarli: sono codice di terzi che riceve le variabili dichiarate.
+- **`filtro_jq`**: parametro opzionale dello strumento (se `jq` è in `allow`). Senza shell non ci sono pipe, quindi l'output del comando
+  (fino a 8 MB) passa per `jq -c <filtro>` in un secondo processo, senza le variabili segrete nell'ambiente. Il filtro non può iniziare con `-`.
+  Un filtro jq può leggere file leggibili da `nobody`, stesso rischio residuo di `cat`.
+Il nome dello strumento sostituisce i caratteri non alfanumerici con `_` (`esegui_homeassistant_skill`).
+
+### Home Assistant (sola lettura)
+`skills/homeassistant-skill` + `skill.local.yaml`: `HA_URL` e `HA_TOKEN` in `agent/.env`. Lo script `ha_read.py` usa solo la libreria standard,
+parla solo con `HA_URL`, consente GET su percorsi in allowlist, non segue redirect e censura il token (letto prima di abilitarlo).
+Verificato con "elenca tutte le luci": strumento in 205 ms, risposta con i nomi leggibili in 2,9 s.
+Il controllo dei dispositivi (accendere/spegnere) **non è abilitato**: richiederebbe `curl` con `allowed_hosts: ["${HA_URL host}"]` e chiamate
+a `/api/services/...`, cioè un'azione sul mondo fisico scelta dall'LLM.
+
+### curl abilitato per Home Assistant (2026-11-07)
+La skill ora ammette `curl` oltre allo script di sola lettura, quindi l'LLM può **agire sui dispositivi** (turn_on, turn_off, toggle).
+Controlli aggiunti in `commands.py` / `skills.py`:
+- `allowed_hosts` accetta anche URL (`"${HA_URL}"`): viene ridotto a `host:porta`. Una variabile non definita fa scartare la voce e,
+  se non resta nessun host, la skill resta disattivata (`expandvars` altrimenti la lascia letterale).
+- `allowed_paths`: regole `"METODO regex"` sul percorso dell'URL. Con le regole presenti, ogni richiesta deve corrispondere esattamente a una.
+  Il metodo effettivo è `-X`, altrimenti POST se ci sono dati, altrimenti GET. **curl ammette solo GET e POST** (DELETE e PUT rifiutati).
+- Regole di Home Assistant: `GET /api/states` e `/api/states/<entity>`; `POST /api/services/<dominio>/<servizio>` per i domini
+  light, switch, scene, climate, fan, media_player, input_boolean, input_number, input_select, vacuum.
+  **Esclusi:** lock, alarm_control_panel, cover (tapparelle e garage), script, automation, homeassistant, notify, shell_command,
+  hassio, `/api/config`, `/api/events`, `POST /api/states/...` (stati falsi). Per includere un dominio, aggiungilo nella regex di `skill.local.yaml`.
+- Il blocco è duro (codice), non solo istruzioni al modello: una richiesta fuori regola non esce dal container.
+- Log: il motivo di rifiuto o il codice di uscita compaiono sempre (`rifiutato/fallito`); la riga scritta dall'LLM solo con
+  `SKILL_LOG_COMMANDS=1` (contiene i segnaposto `$HA_TOKEN`, non i valori).
+
+Verificato: server finto con casi ammessi (letture, `turn_on` con token sostituito) e 10 casi vietati (lock, allarme, restart, DELETE, PUT,
+stato falso, config, `..`, dati su GET, host esterno): nessuna richiesta è arrivata al server. Con Home Assistant reale solo **letture**
+("quali luci sono accese?", "elenca tutte le luci", "quali interruttori ci sono?"). Nessuna azione è stata eseguita sulla casa.
+Un errore iniziale (jq codice 5) era dovuto a un esempio sbagliato nelle istruzioni (`and` dentro `select` con la pipe): corretto con filtri esatti.
+
+### Tapparelle (cover) abilitate (2026-11-07)
+Regola aggiunta: `POST /api/services/cover/(open_cover|close_cover|stop_cover|set_cover_position|toggle)`. Non ammessi gli altri servizi
+`cover` (es. `open_cover_tilt`). Letto l'elenco reale: 10 entità `cover`, nove con `device_class: shutter` e una, `cover.sonoff_10025f56ec`
+("MINI-RBS", stato open), senza tipo. La regola filtra il **servizio**, non l'entità: in Home Assistant anche garage e cancelli sono
+`cover`. Mitigazione solo nelle istruzioni (non agire su garage, cancelli, porte), quindi non è un blocco duro. Per un blocco duro servirebbe
+restringere le entità (non supportato oggi: le regole guardano solo metodo e percorso). Nessuna azione eseguita sulle tapparelle reali.

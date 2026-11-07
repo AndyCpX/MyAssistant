@@ -16,8 +16,10 @@ import resource
 import shlex
 import shutil
 import signal
+import sys
 import tempfile
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from google.adk.tools import BaseTool
@@ -78,11 +80,16 @@ def _host_ok(url: str, hosts: list[str]) -> str:
     return f"host non ammesso: {sp.hostname}"
 
 
-def check_curl(args: list[str], hosts: list[str]) -> str:
-    """Valida gli argomenti di curl. Ritorna '' se ok, altrimenti il motivo del rifiuto."""
+def check_curl(args: list[str], hosts: list[str], rules: list | None = None) -> str:
+    """Valida gli argomenti di curl. Ritorna '' se ok, altrimenti il motivo del rifiuto.
+
+    `rules`: lista di (metodo, regex) sul percorso dell'URL; se presente, ogni URL deve corrispondere a una regola con il
+    metodo effettivo (-X, altrimenti POST se ci sono dati, altrimenti GET). Sono ammessi solo GET e POST.
+    """
     if not hosts:
         return "curl richiede 'allowed_hosts' nella skill"
     urls: list[str] = []
+    method, has_data = "", False
     i = 0
 
     def data_bad(flag: str, val: str) -> bool:
@@ -98,8 +105,12 @@ def check_curl(args: list[str], hosts: list[str]) -> str:
             if name in _CURL_VALUE_LONG and not has_val:
                 i += 1
                 val = args[i] if i < len(args) else ""
-            if name in _CURL_DATA and data_bad(name, val):
-                return "non si possono inviare file"
+            if name in _CURL_DATA:
+                has_data = True
+                if data_bad(name, val):
+                    return "non si possono inviare file"
+            if name == "--request":
+                method = val.upper()
             if name == "--url":
                 urls.append(val)
         elif a.startswith("-") and len(a) > 1:
@@ -111,8 +122,12 @@ def check_curl(args: list[str], hosts: list[str]) -> str:
                     if not val:
                         i += 1
                         val = args[i] if i < len(args) else ""
-                    if ch == "d" and data_bad("-d", val):
-                        return "non si possono inviare file"
+                    if ch == "d":
+                        has_data = True
+                        if data_bad("-d", val):
+                            return "non si possono inviare file"
+                    if ch == "X":
+                        method = val.upper()
                     break
         else:
             urls.append(a)
@@ -122,25 +137,89 @@ def check_curl(args: list[str], hosts: list[str]) -> str:
     for u in urls:
         if why := _host_ok(u, hosts):
             return why
+    method = method or ("POST" if has_data else "GET")
+    if method not in ("GET", "POST"):
+        return f"metodo non ammesso: {method}"
+    if rules:
+        for u in urls:
+            path = urlsplit(u if "://" in u else "http://" + u).path or "/"
+            if not any(m == method and rx.fullmatch(path) for m, rx in rules):
+                return f"richiesta non ammessa dalla skill: {method} {path}"
     return ""
 
 
-class RunTool(BaseTool):
-    """Un tool per skill: `comando` = riga di comando con uno degli eseguibili ammessi."""
+MAX_PIPE = 8 * 1024 * 1024   # output di un comando che passa per un filtro jq (l'output finale resta piccolo)
 
-    def __init__(self, skill: str, allow: list[str], hosts: list[str], env_names: list[str], gate):
-        super().__init__(
-            name=f"esegui_{skill}",
-            description=(f"Esegue un comando per la skill {skill}. Eseguibili ammessi: {', '.join(allow)}. "
-                         "Non c'è una shell: niente pipe, redirezioni, variabili o sostituzioni. "
-                         "Passa una sola riga con eseguibile e argomenti."))
+
+async def _exec(path: str, args: list[str], env: dict, work: str, stdin: bytes | None, cap: int):
+    """Esegue un processo (stdout e stderr separati, a dimensione limitata). Ritorna (codice, stdout, stderr)."""
+    proc = await asyncio.create_subprocess_exec(
+        path, *args, stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=work, env=env,
+        preexec_fn=_limits, start_new_session=True)
+
+    async def feed() -> None:
+        if stdin is not None:
+            try:
+                proc.stdin.write(stdin)
+                await proc.stdin.drain()
+                proc.stdin.close()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    async def read(stream, limit: int) -> bytes:
+        buf = b""
+        while len(buf) < limit and (chunk := await stream.read(8192)):
+            buf += chunk
+        return buf
+
+    try:
+        async with asyncio.timeout(TIMEOUT_S):
+            _, out, err = await asyncio.gather(feed(), read(proc.stdout, cap), read(proc.stderr, 8192))
+            if len(out) < cap:
+                await proc.wait()
+    finally:
+        if proc.returncode is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+    return proc.returncode, out, err
+
+
+class RunTool(BaseTool):
+    """Un tool per skill: `comando` = riga con un eseguibile ammesso o uno script della skill; `filtro_jq` opzionale."""
+
+    def __init__(self, skill: str, allow: list[str], hosts: list[str], env_names: list[str], gate,
+                 scripts: list[str] | None = None, folder: Path | None = None, rules: list | None = None):
+        self.scripts: dict[str, Path] = {}
+        for s in scripts or []:   # solo file .py dentro la cartella della skill: niente python3 con argomenti liberi
+            p = (folder / s).resolve() if folder else None
+            if p is None or not p.is_file() or p.suffix != ".py" or folder.resolve() not in p.parents:
+                raise ValueError(f"script non valido: {s}")
+            self.scripts[s] = self.scripts[p.name] = p
+        parts = []
+        if allow:
+            parts.append("Eseguibili ammessi: " + ", ".join(allow) + ".")
+        if scripts:
+            parts.append("Script ammessi (scrivi il nome dello script seguito dagli argomenti): " + ", ".join(scripts) + ".")
+        if "jq" in allow:
+            parts.append("Per output grandi passa `filtro_jq` (filtro jq applicato all'output del comando): "
+                         "non c'è una shell, quindi niente pipe.")
+        super().__init__(name="esegui_" + re.sub(r"\W", "_", skill),
+                         description=f"Esegue un comando per la skill {skill}. " + " ".join(parts) +
+                                     " Niente pipe, redirezioni, variabili o sostituzioni. Una sola riga.")
         self.skill, self.allow, self.hosts, self.env_names, self.gate = skill, allow, hosts, env_names, gate
+        self.rules = rules or []
 
     def _get_declaration(self) -> types.FunctionDeclaration:
+        props = {"comando": types.Schema(type=types.Type.STRING, description="Riga di comando")}
+        if "jq" in self.allow:
+            props["filtro_jq"] = types.Schema(type=types.Type.STRING, description="Filtro jq opzionale sull'output")
         return types.FunctionDeclaration(
             name=self.name, description=self.description,
-            parameters=types.Schema(type=types.Type.OBJECT, required=["comando"], properties={
-                "comando": types.Schema(type=types.Type.STRING, description="Riga di comando, es. curl -s URL")}))
+            parameters=types.Schema(type=types.Type.OBJECT, required=["comando"], properties=props))
 
     async def process_llm_request(self, *, tool_context, llm_request) -> None:
         if self.gate(self.skill):
@@ -148,12 +227,16 @@ class RunTool(BaseTool):
 
     async def run_async(self, *, args, tool_context):
         t0 = time.monotonic()
-        res = await self._run(str(args.get("comando", "")))
+        res = await self._run(str(args.get("comando", "")), str(args.get("filtro_jq") or ""))
+        if os.getenv("SKILL_LOG_COMMANDS") == "1":   # solo per debug: la riga ha i segnaposto ($TOKEN), non i valori
+            log.info("comando scritto dall'LLM (%s): %s | filtro: %s", self.skill, args.get("comando"), args.get("filtro_jq"))
+        if "error" in res:   # motivo del rifiuto o dell'errore (testo nostro o codice di uscita, senza segreti)
+            log.info("comando (%s) rifiutato/fallito: %s", self.skill, res["error"])
         log.info("comando (%s): %s in %.0f ms", self.skill, "errore" if "error" in res else "ok",
                  (time.monotonic() - t0) * 1000)
         return res
 
-    async def _run(self, line: str) -> dict:
+    async def _run(self, line: str, jq_filter: str = "") -> dict:
         try:
             argv = shlex.split(line)
         except ValueError:
@@ -164,46 +247,42 @@ class RunTool(BaseTool):
         subst = {n: os.environ[n] for n in self.env_names if n in os.environ}
         if subst:   # il sistema espande solo le variabili dichiarate dalla skill: l'LLM scrive $NOME e non vede mai il valore
             rest = [_VAR.sub(lambda m: subst.get(m.group(1) or m.group(2), m.group(0)), a) for a in rest]
-        if exe not in self.allow or "/" in exe:
+        if exe in self.scripts:
+            path, rest = sys.executable, ["-I", str(self.scripts[exe]), *rest]   # -I: ignora PYTHON* e il sito utente
+        elif exe not in self.allow or "/" in exe:
             return {"error": f"eseguibile non ammesso: {exe}"}
-        if exe == "curl" and (why := check_curl(rest, self.hosts)):
-            return {"error": why}
-        path = shutil.which(exe, path=SAFE_PATH)
-        if not path:
-            return {"error": f"{exe} non è installato"}
+        else:
+            if exe == "curl" and (why := check_curl(rest, self.hosts, self.rules)):
+                return {"error": why}
+            path = shutil.which(exe, path=SAFE_PATH)
+            if not path:
+                return {"error": f"{exe} non è installato"}
+        if jq_filter:
+            if "jq" not in self.allow:
+                return {"error": "filtro_jq non ammesso per questa skill"}
+            if jq_filter.lstrip().startswith("-") or len(jq_filter) > 2000:
+                return {"error": "filtro jq non valido"}
         secrets = [os.environ[n] for n in self.env_names if os.environ.get(n)]
         work = tempfile.mkdtemp(prefix="skill-")
-        root = os.geteuid() == 0
-        if root:   # via i privilegi: l'utente senza permessi non legge /data ne' /proc dell'agente
+        if os.geteuid() == 0:
             os.chown(work, UID, GID)
-        env = {"PATH": SAFE_PATH, "HOME": work, "LANG": "C.UTF-8", **{n: os.environ[n] for n in self.env_names if n in os.environ}}
+        env = {"PATH": SAFE_PATH, "HOME": work, "LANG": "C.UTF-8", **subst}
         try:
-            proc = await asyncio.create_subprocess_exec(
-                path, *rest, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT, cwd=work, env=env, preexec_fn=_limits, start_new_session=True)
-            out = b""
-            try:
-                async with asyncio.timeout(TIMEOUT_S):
-                    while len(out) < MAX_OUT and (chunk := await proc.stdout.read(8192)):
-                        out += chunk
-                    await proc.wait() if len(out) < MAX_OUT else None
-            except TimeoutError:
-                return {"error": "comando troppo lento"}
-            finally:
-                if proc.returncode is None:
-                    try:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    await proc.wait()
+            rc, out, err = await _exec(path, rest, env, work, None, MAX_PIPE if jq_filter else MAX_OUT)
+            if jq_filter and rc == 0:   # secondo stadio: jq senza variabili segrete nell'ambiente
+                jq = shutil.which("jq", path=SAFE_PATH)
+                rc, out, err = await _exec(jq, ["-c", jq_filter], {k: v for k, v in env.items() if k not in subst},
+                                           work, out, MAX_OUT)
+        except TimeoutError:
+            return {"error": "comando troppo lento"}
         except OSError:
             return {"error": "impossibile eseguire il comando"}
         finally:
             shutil.rmtree(work, ignore_errors=True)
-        text = out.decode("utf-8", "replace")
+        text = (out + (b"\n" + err if err else b"")).decode("utf-8", "replace")
         for s in secrets:   # un comando potrebbe stampare il proprio token: non deve arrivare all'LLM ne' alla voce
             text = text.replace(s, "***")
-        text = text[:MAX_RESULT_CHARS]
-        if proc.returncode != 0:
-            return {"error": f"codice di uscita {proc.returncode}", "output": text}
+        text = text.strip()[:MAX_RESULT_CHARS]
+        if rc != 0:
+            return {"error": f"codice di uscita {rc}", "output": text}
         return {"result": text}

@@ -15,7 +15,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 import yaml
@@ -230,11 +230,20 @@ def _read_manifest(folder: Path) -> tuple[dict, str] | None:
         m = _FRONT.match(md.read_text(encoding="utf-8").replace("\r\n", "\n"))
         if not m:
             raise ValueError("frontmatter mancante")
-        return yaml.safe_load(m.group(1)) or {}, (m.group(2) or "").strip()
-    old = folder / "skill.yaml"
-    if old.exists():
-        return yaml.safe_load(old.read_text(encoding="utf-8")) or {}, ""
-    return None
+        cfg, body = yaml.safe_load(m.group(1)) or {}, (m.group(2) or "").strip()
+    else:
+        old = folder / "skill.yaml"
+        if not old.exists():
+            return None
+        cfg, body = yaml.safe_load(old.read_text(encoding="utf-8")) or {}, ""
+    # skill.local.yaml: adattamenti locali a una skill di terzi (comandi, trigger, descrizione, istruzioni in italiano)
+    # senza modificare i suoi file, che un aggiornamento sovrascriverebbe. La chiave `instructions` sostituisce il corpo.
+    local = folder / "skill.local.yaml"
+    if local.exists():
+        extra = yaml.safe_load(local.read_text(encoding="utf-8")) or {}
+        body = str(extra.pop("instructions", body)).strip()
+        cfg = {**cfg, **extra}
+    return cfg, body
 
 
 def _infer_type(cfg: dict, folder: Path) -> str:
@@ -247,19 +256,36 @@ def _infer_type(cfg: dict, folder: Path) -> str:
     return "instructions"   # solo istruzioni (ed eventualmente comandi)
 
 
-def _build_commands(name: str, cfg: dict) -> tuple[list[BaseTool], str]:
+def _build_commands(name: str, cfg: dict, folder: Path) -> tuple[list[BaseTool], str]:
     c = cfg.get("commands")
     if not c:
         return [], ""
     allow = [str(x) for x in c.get("allow") or []]
-    if not allow:
-        return [], "commands.allow è vuoto"
+    scripts = [str(s) for s in c.get("scripts") or []]
+    if not allow and not scripts:
+        return [], "commands.allow e commands.scripts sono vuoti"
     if "wget" in allow:
         return [], "wget non è supportato (usa curl)"
-    hosts = [os.path.expandvars(str(h)) for h in c.get("allowed_hosts") or []]   # es. "${HA_HOST}"
+    hosts = []
+    for h in c.get("allowed_hosts") or []:   # es. "${HA_URL}" (un URL) oppure "host:porta"
+        h = os.path.expandvars(str(h)).strip()
+        if "$" in h:   # variabile non definita: expandvars la lascia com'e'
+            continue
+        if "://" in h:
+            h = urlsplit(h).netloc.rsplit("@", 1)[-1]   # solo host[:porta], senza credenziali
+        if h:
+            hosts.append(h)
     if "curl" in allow and not hosts:
-        return [], "curl richiede commands.allowed_hosts"
-    return [commands.RunTool(name, allow, hosts, [str(e) for e in c.get("env") or []], _gate)], ""
+        return [], "curl richiede commands.allowed_hosts (la variabile potrebbe essere vuota)"
+    rules = []
+    for r in c.get("allowed_paths") or []:   # "GET ^/api/states$": metodo e regex sul percorso
+        try:
+            method, _, pattern = str(r).partition(" ")
+            rules.append((method.upper(), re.compile(pattern.strip())))
+        except re.error:
+            return [], f"regola allowed_paths non valida: {r}"
+    return [commands.RunTool(name, allow, hosts, [str(e) for e in c.get("env") or []], _gate,
+                             scripts=scripts, folder=folder, rules=rules)], ""
 
 
 def load_all() -> list[Skill]:
@@ -286,7 +312,7 @@ def load_all() -> list[Skill]:
                 elif skill.type != "instructions":
                     skill.problem = f"tipo '{skill.type}' non supportato"
                 if not skill.problem and not missing:
-                    cmd_tools, skill.problem = _build_commands(name, cfg)
+                    cmd_tools, skill.problem = _build_commands(name, cfg, folder)
                     skill.tools += cmd_tools
                 skill.enabled = skill.enabled and not skill.problem
             except Exception as e:   # una skill rotta non deve fermare l'agente
