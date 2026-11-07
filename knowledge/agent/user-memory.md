@@ -1,7 +1,7 @@
 ---
 type: Design
 title: Memoria delle preferenze utente (Qdrant)
-description: Progetto, non ancora implementato, per ricordare le preferenze del parlante e usarle nelle conversazioni vocali.
+description: Memoria delle preferenze (Qdrant, in agent/app/memory.py) per ricordare le preferenze del parlante e usarle nelle conversazioni vocali.
 tags: [qdrant, memoria, preferenze, embedding]
 status: draft
 generated: { by: ai:claude, at: 2026-11-07T00:00:00Z }
@@ -9,7 +9,7 @@ generated: { by: ai:claude, at: 2026-11-07T00:00:00Z }
 
 # Memoria delle preferenze utente
 
-**Stato: progetto approvato nelle linee guida, nessun codice scritto.** Estende la [pipeline](/agent/pipeline.md)
+**Stato: implementata la prima versione in `agent/app/memory.py` (testata su un Qdrant isolato; non ancora provata end to end con voce e LLM reali).** Estende la [pipeline](/agent/pipeline.md)
 dell'agente, che oggi tiene solo la sessione di conversazione in memoria. Il parlante arriva già da `speaker.py`
 e `agent.ask(device_id, text, speaker)` lo riceve come argomento.
 
@@ -109,3 +109,32 @@ Servizio `qdrant` nel `docker-compose.yml` con volume proprio; cache del modello
 - Soglia di similarità per "stessa informazione" (deduplica e ripetizione), da calibrare su esempi reali.
 - Soglia esatta di `PERSONALIZATION_THRESHOLD` e del margine sul secondo candidato.
 - Quale modello fa l'estrazione dei candidati (lo stesso LLM dell'agente o uno più piccolo).
+
+## Implementazione (2026-11-07)
+- Codice: `agent/app/memory.py`; integrazione in `main.py` (recupero prima della risposta, osservazione in background dopo),
+  `agent.py` (le memorie entrano nell'istruzione tramite `ContextVar`, quindi non si accumulano nello storico della sessione),
+  `speaker.py` (nuovo campo `Match.margin`). Servizio `qdrant` nel compose senza porte pubblicate.
+- Se `QDRANT_URL` è vuoto o Qdrant non risponde all'avvio, l'assistente funziona comunque senza preferenze.
+- Endpoint: `GET/POST /v1/memories`, `DELETE /v1/memories/{id}`, `DELETE /v1/memories?user=`.
+- Comandi vocali: "ricordati che…" (attiva subito) e "dimentica che…" (riconosciuti con regex).
+- Ripetizione: due occorrenze contano come distinte solo se separate da almeno `MEMORY_REPEAT_GAP_S` (600 s), come
+  approssimazione di "conversazione diversa".
+
+### Soglie calibrate con il modello MiniLM (campione piccolo)
+| Soglia | Valore | Evidenza |
+|---|---|---|
+| `MEMORY_MIN_SCORE` | 0.30 | pertinenti 0.34-0.59, non pertinenti fino a 0.28 (margine stretto) |
+| `MEMORY_SAME_SCORE` | 0.85 | parafrasi 0.91-0.97, informazioni diverse fino a 0.71 |
+| `PERSONALIZATION_THRESHOLD` / `PERSONALIZATION_MARGIN` | 0.75 / 0.05 | non calibrate: servono i punteggi vocali reali dal log |
+
+Limiti noti: "è vegetariano" e "non mangia carne" hanno similarità 0.45 e non vengono riconosciute come la stessa cosa
+(restano candidati separati, a meno che l'estrazione assegni la stessa `key`). Contraddizioni brevi come "cane/gatto" (0.68)
+non sono rilevate dalla sola similarità.
+
+### Verificato nel test
+Recupero con pinned, isolamento tra utenti, candidato non usato alla prima occorrenza e attivo alla seconda, sostituzione per
+`key`, "dimentica", memorie scadute ignorate e rimosse dalla pulizia, regola di personalizzazione (soglia e margine).
+
+### Non ancora verificato
+Estrazione con l'LLM reale, flusso con voce e wake word dal dispositivo, latenza end to end e il comportamento con Qdrant
+fermo a runtime.

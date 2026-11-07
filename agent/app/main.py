@@ -11,7 +11,7 @@ from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel
 
-from . import enrollment, speaker, stt, tts
+from . import enrollment, memory, speaker, stt, tts
 from .agent import Assistant
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -28,7 +28,18 @@ async def lifespan(_: FastAPI):
     if speaker.enabled():
         await asyncio.to_thread(speaker.load)
     assistant = Assistant()
+    cleaner = None
+    if memory.enabled():
+        try:
+            await memory.start()
+            cleaner = asyncio.create_task(memory.cleanup_loop())
+        except Exception:   # Qdrant spento: l'assistente funziona comunque, senza preferenze
+            log.exception("memoria non disponibile, continuo senza preferenze")
+            memory.URL = ""
     yield
+    if cleaner:
+        cleaner.cancel()
+        await memory.stop()
 
 
 app = FastAPI(title="JARVIS agent", lifespan=lifespan)
@@ -105,7 +116,17 @@ async def utterance(req: Request, rate: int = 16000) -> dict:
     if not text:
         return result("", "")
     t0 = time.monotonic()
-    reply = await assistant.ask(dev, text, who.name if who else None)
+    # Preferenze solo con parlante noto E sicuro (soglia e margine piu' severi del semplice riconoscimento).
+    user = who.name if who and memory.enabled() and memory.personalize_ok(who.name, who.score, who.margin) else None
+    mems: list[str] = []
+    if user:
+        try:
+            mems = await memory.retrieve(user, text)
+        except Exception:
+            log.exception("recupero memorie fallito")
+    reply = await assistant.ask(dev, text, who.name if who else None, memories=mems)
+    if user:   # dopo la risposta, senza bloccarla
+        asyncio.create_task(memory.observe(user, text, dev))
     log.info("risposta: %r", reply)
     log.info("TEMPI stt=%.1fs voce=%.1fs llm=%.1fs totale=%.1fs (audio %d ms)",
              t_stt, t_spk, time.monotonic() - t0, time.monotonic() - t_end, ms)
@@ -153,3 +174,45 @@ async def delete_speaker(req: Request, name: str) -> None:
     check_auth(req)
     if not speaker.delete(name):
         raise HTTPException(404, "persona non registrata")
+
+
+class MemoryIn(BaseModel):
+    user: str
+    text: str
+    pinned: bool = False
+
+
+def _need_memory() -> None:
+    if not memory.enabled():
+        raise HTTPException(503, "memoria non configurata (QDRANT_URL)")
+
+
+@app.get("/v1/memories")
+async def list_memories(req: Request, user: str, status: str | None = None) -> list[dict]:
+    check_auth(req)
+    _need_memory()
+    return await memory.list_memories(user, status)
+
+
+@app.post("/v1/memories")
+async def add_memory(req: Request, body: MemoryIn) -> dict:
+    """Inserimento manuale (attivo subito); con pinned=true viene sempre iniettata e non scade."""
+    check_auth(req)
+    _need_memory()
+    return {"id": await memory.add(body.user, body.text, pinned=body.pinned)}
+
+
+@app.delete("/v1/memories/{mid}", status_code=204)
+async def delete_memory(req: Request, mid: str) -> None:
+    check_auth(req)
+    _need_memory()
+    if not await memory.delete(mid):
+        raise HTTPException(404, "memoria inesistente")
+
+
+@app.delete("/v1/memories", status_code=204)
+async def purge_memories(req: Request, user: str) -> None:
+    """Oblio totale delle memorie di una persona."""
+    check_auth(req)
+    _need_memory()
+    await memory.purge_user(user)

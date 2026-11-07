@@ -8,3 +8,5 @@ httpx>=0.27
 tzdata
 mcp
 sherpa-onnx
+qdrant-client
+fastembed

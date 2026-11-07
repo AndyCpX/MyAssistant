@@ -1,5 +1,6 @@
 """Agente Google ADK con modello configurabile via LiteLLM (default: Ollama Cloud)."""
 import os
+from contextvars import ContextVar
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -51,8 +52,20 @@ def build_agent() -> LlmAgent:
         name="jarvis",
         model=model,
         description="Assistente vocale domestico.",
-        instruction=lambda _ctx: f"Adesso è {get_current_time()}. " + base,
+        instruction=lambda _ctx: f"Adesso è {get_current_time()}. " + base + _memory_text(),
     )
+
+
+# Memorie dell'utente per la richiesta in corso (niente nello storico della sessione, quindi nessun accumulo).
+_memories: ContextVar[list[str]] = ContextVar("memories", default=[])
+
+
+def _memory_text() -> str:
+    mem = _memories.get()
+    if not mem:
+        return ""
+    return ("\nCosa sai di questa persona (usalo solo se pertinente, senza elencarlo né dire che lo ricordi):\n"
+            + "\n".join(f"- {m}" for m in mem))
 
 
 class Assistant:
@@ -61,8 +74,10 @@ class Assistant:
         self.runner = Runner(agent=build_agent(), app_name=APP_NAME, session_service=self.sessions)
         self._known: set[str] = set()
 
-    async def ask(self, device_id: str, text: str, speaker: str | None = None) -> str:
+    async def ask(self, device_id: str, text: str, speaker: str | None = None,
+                  memories: list[str] | None = None) -> str:
         """Una conversazione separata per ogni persona riconosciuta (e una per gli ospiti)."""
+        _memories.set(memories or [])
         sid = f"{device_id}:{speaker or 'ospite'}"
         if sid not in self._known:
             await self.sessions.create_session(app_name=APP_NAME, user_id=sid, session_id=sid)

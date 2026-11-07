@@ -4,10 +4,22 @@ services:
     ports:
       - "8080:8080"
     env_file: .env
+    environment:
+      QDRANT_URL: http://qdrant:6333   # memoria preferenze; togliere/svuotare per disattivarla
+    depends_on:
+      - qdrant
     volumes:
       - whisper-models:/models/hf   # cache del modello STT
+      - fastembed-models:/models/fastembed   # cache del modello di embedding (preferenze)
       - speaker-data:/data          # voci registrate (dati biometrici, solo locali)
+    restart: unless-stopped
+  qdrant:
+    image: qdrant/qdrant:v1.20.0   # solo rete interna: nessuna porta pubblicata
+    volumes:
+      - qdrant-data:/qdrant/storage  # preferenze degli utenti (dati personali, solo locali)
     restart: unless-stopped
 volumes:
   whisper-models:
+  fastembed-models:
   speaker-data:
+  qdrant-data:

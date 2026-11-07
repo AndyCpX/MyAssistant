@@ -29,6 +29,7 @@ class Match:
     name: str | None   # None = sconosciuto / ospite
     score: float       # similarità col miglior candidato (0 se nessuno registrato)
     role: str = "guest"
+    margin: float = 0.0   # distacco dal secondo candidato (1.0 se e' l'unica persona registrata)
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -66,13 +67,15 @@ def seconds(pcm16le: bytes, rate: int) -> float:
 
 
 def identify(emb: np.ndarray) -> Match:
-    best, best_score = None, 0.0
+    best, best_score, second = None, 0.0, 0.0
     for name, rec in _speakers.items():
         score = float(np.dot(emb, np.array(rec["centroid"], dtype=np.float32)))
         if score > best_score:
-            best, best_score = name, score
+            best, best_score, second = name, score, best_score
+        elif score > second:
+            second = score
     if best is not None and best_score >= THRESHOLD:
-        return Match(best, best_score, _speakers[best].get("role", "member"))
+        return Match(best, best_score, _speakers[best].get("role", "member"), margin=best_score - second)
     return Match(None, best_score)
 
 
