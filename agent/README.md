@@ -22,3 +22,9 @@ Il firmware non cambia: usa solo il campo `label` (anello bianco); `transcript`/
 ## Configurazione LLM
 `LLM_MODEL` / `LLM_API_BASE` / `LLM_API_KEY` accettano qualsiasi modello LiteLLM (vedi `.env.example`).
 Sessione di conversazione per dispositivo (header `X-Device-Id`, altrimenti IP), in memoria.
+
+## Skill
+Cartelle in `agent/skills/<nome>/` con un `SKILL.md` (frontmatter YAML + istruzioni in markdown). Una skill può dare istruzioni,
+tool `http` o `python` e comandi scelti dall'LLM (`commands:`). Modelli in `skills/_esempio_http/` e `skills/_esempio_comandi/`,
+esempio funzionante in `skills/meteo/`. Dopo aver aggiunto o modificato una skill: `curl.exe -X POST localhost:8080/v1/skills/reload`;
+`GET /v1/skills` mostra lo stato (e perché una skill è disattivata). Dettagli e rischi in `knowledge/agent/skills.md`.

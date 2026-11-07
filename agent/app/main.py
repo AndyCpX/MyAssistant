@@ -11,7 +11,7 @@ from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel
 
-from . import enrollment, memory, speaker, stt, tts
+from . import embed, enrollment, memory, skills, speaker, stt, tts
 from .agent import Assistant
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -27,6 +27,15 @@ async def lifespan(_: FastAPI):
     await asyncio.to_thread(stt.load)  # evita la latenza del primo enunciato
     if speaker.enabled():
         await asyncio.to_thread(speaker.load)
+    try:   # i comandi girano come utente senza privilegi: /data (voci registrate) deve restare illeggibile per lui
+        os.chmod(os.path.dirname(speaker.STORE) or "/data", 0o700)
+    except OSError:
+        log.warning("impossibile restringere i permessi di /data")
+    try:
+        await embed.load()   # attivazione delle skill per similarita' e memoria utente
+    except Exception:
+        log.exception("embedding non disponibili: le skill useranno solo i trigger")
+    skills.load_all()
     assistant = Assistant()
     cleaner = None
     if memory.enabled():
@@ -216,3 +225,16 @@ async def purge_memories(req: Request, user: str) -> None:
     check_auth(req)
     _need_memory()
     await memory.purge_user(user)
+
+
+@app.get("/v1/skills")
+async def list_skills(req: Request) -> list[dict]:
+    check_auth(req)
+    return skills.listing()
+
+
+@app.post("/v1/skills/reload")
+async def reload_skills(req: Request) -> list[dict]:
+    """Rilegge SKILLS_DIR senza riavviare l'agente (le conversazioni in corso restano)."""
+    check_auth(req)
+    return await asyncio.to_thread(assistant.reload_skills)

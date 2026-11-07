@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 HF_HOME=/models/hf
-RUN mkdir -p /models
+RUN apt-get update && apt-get install -y --no-install-recommends curl jq && rm -rf /var/lib/apt/lists/* && mkdir -p /models
 WORKDIR /srv
 COPY requirements.txt .
 RUN pip install -r requirements.txt

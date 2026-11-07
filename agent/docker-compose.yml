@@ -12,6 +12,7 @@ services:
       - whisper-models:/models/hf   # cache del modello STT
       - fastembed-models:/models/fastembed   # cache del modello di embedding (preferenze)
       - speaker-data:/data          # voci registrate (dati biometrici, solo locali)
+      - ./skills:/srv/skills:ro      # skill dinamiche (POST /v1/skills/reload per ricaricarle)
     restart: unless-stopped
   qdrant:
     image: qdrant/qdrant:v1.20.0   # solo rete interna: nessuna porta pubblicata

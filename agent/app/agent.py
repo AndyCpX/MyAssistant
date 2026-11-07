@@ -10,6 +10,8 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from . import skills
+
 APP_NAME = "jarvis"
 _GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
 _MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto",
@@ -52,7 +54,8 @@ def build_agent() -> LlmAgent:
         name="jarvis",
         model=model,
         description="Assistente vocale domestico.",
-        instruction=lambda _ctx: f"Adesso è {get_current_time()}. " + base + _memory_text(),
+        tools=skills.all_tools(),
+        instruction=lambda _ctx: f"Adesso è {get_current_time()}. " + base + skills.index_text() + skills.bodies_text() + _memory_text(),
     )
 
 
@@ -78,6 +81,7 @@ class Assistant:
                   memories: list[str] | None = None) -> str:
         """Una conversazione separata per ogni persona riconosciuta (e una per gli ospiti)."""
         _memories.set(memories or [])
+        await skills.activate(f"{device_id}:{speaker or 'ospite'}", text)
         sid = f"{device_id}:{speaker or 'ospite'}"
         if sid not in self._known:
             await self.sessions.create_session(app_name=APP_NAME, user_id=sid, session_id=sid)
@@ -90,3 +94,9 @@ class Assistant:
             if ev.is_final_response() and ev.content and ev.content.parts:
                 reply = "".join(p.text or "" for p in ev.content.parts).strip()
         return reply
+
+    def reload_skills(self) -> list[dict]:
+        """Rilegge le skill e aggiorna i tool dell'agente; le sessioni in corso restano."""
+        skills.load_all()
+        self.runner.agent.tools = skills.all_tools()
+        return skills.listing()

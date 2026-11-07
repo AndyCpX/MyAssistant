@@ -17,12 +17,12 @@ import uuid
 import litellm
 from qdrant_client import AsyncQdrantClient, models
 
+from . import embed as embedder
+
 log = logging.getLogger("memory")
 
 URL = os.getenv("QDRANT_URL", "")
 COLLECTION = os.getenv("MEMORY_COLLECTION", "user_memories")
-EMBED_MODEL = os.getenv("MEMORY_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
-EMBED_CACHE = os.getenv("FASTEMBED_CACHE_PATH", "/models/fastembed")
 DIM = 384
 
 DAY = 86400
@@ -38,7 +38,6 @@ PERSONALIZATION_THRESHOLD = float(os.getenv("PERSONALIZATION_THRESHOLD", "0.75")
 SPEAKER_MARGIN = float(os.getenv("PERSONALIZATION_MARGIN", "0.05"))
 
 _client: AsyncQdrantClient | None = None
-_embedder = None
 
 _REMEMBER = re.compile(r"\b(?:ricordati|ricorda|tieni presente|tieni a mente|memorizza)\s+(?:che\s+)?(.+)", re.I | re.S)
 _FORGET = re.compile(r"\b(?:dimentica|scordati|cancella dalla memoria)\s+(?:che\s+)?(.+)", re.I | re.S)
@@ -73,10 +72,9 @@ def _must() -> AsyncQdrantClient:
 
 async def start() -> None:
     """Connette Qdrant, carica il modello di embedding e crea collezione e indici (idempotente)."""
-    global _client, _embedder
-    from fastembed import TextEmbedding
+    global _client
 
-    _embedder = await asyncio.to_thread(TextEmbedding, model_name=EMBED_MODEL, cache_dir=EMBED_CACHE)
+    await embedder.load()
     _client = AsyncQdrantClient(url=URL)
     if not await _client.collection_exists(COLLECTION):
         await _client.create_collection(
@@ -93,8 +91,7 @@ async def stop() -> None:
 
 
 async def embed(text: str) -> list[float]:
-    vec = await asyncio.to_thread(lambda: next(iter(_embedder.embed([text]))))
-    return [float(x) for x in vec]
+    return await embedder.embed(text)
 
 
 def _flt(user: str, status: list[str] | None = None, pinned: bool | None = None, live: bool = True) -> models.Filter:
