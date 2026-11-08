@@ -11,7 +11,7 @@ from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel
 
-from . import embed, enrollment, memory, skills, speaker, stt, tts
+from . import embed, enrollment, memory, notify_client, skills, speaker, stt, tts
 from .agent import Assistant
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -137,10 +137,51 @@ async def utterance(req: Request, rate: int = 16000) -> dict:
     reply = await assistant.ask(dev, text, who.name if who else None, memories=mems)
     if user:   # dopo la risposta, senza bloccarla
         asyncio.create_task(memory.observe(user, text, dev))
+    if notify_client.enabled():
+        reply = await _with_reminder(dev, who.name if who else None, reply)
     log.info("risposta: %r", reply)
     log.info("TEMPI stt=%.1fs voce=%.1fs llm=%.1fs totale=%.1fs (audio %d ms)",
              t_stt, t_spk, time.monotonic() - t0, time.monotonic() - t_end, ms)
     return result(text, reply, who=who)
+
+
+async def _with_reminder(dev: str, speaker: str | None, reply: str) -> str:
+    """Aggiunge alla risposta il prossimo promemoria per questo dispositivo/persona, poi lo conferma."""
+    try:
+        n = await notify_client.pending(dev, speaker)
+        if not n:
+            return reply
+        await notify_client.ack(n["id"], dev)   # letto in questa risposta: non va ripetuto
+    except Exception:
+        log.exception("promemoria non disponibili")
+        return reply
+    return f"{reply} {n['text']}".strip()
+
+
+@app.get("/v1/notifications/next")
+async def next_notification(req: Request) -> dict:
+    """Polling della scheda: un evento alla volta, con audio come una risposta normale."""
+    check_auth(req)
+    if not notify_client.enabled():
+        return {"label": "none"}
+    try:
+        n = await notify_client.pending(device_id(req))
+    except Exception:
+        log.exception("polling notifiche fallito")
+        raise HTTPException(503, "servizio notifiche non raggiungibile")
+    if not n:
+        return {"label": "none"}
+    return result("", n["text"], follow_up=False) | {"id": n["id"]}
+
+
+@app.post("/v1/notifications/{nid}/ack", status_code=204)
+async def ack_notification(req: Request, nid: str) -> Response:
+    check_auth(req)
+    try:
+        await notify_client.ack(nid, device_id(req))
+    except Exception:
+        raise HTTPException(503, "servizio notifiche non raggiungibile")
+    return Response(status_code=204)
 
 
 class TextIn(BaseModel):

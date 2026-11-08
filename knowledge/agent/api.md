@@ -29,4 +29,6 @@ curl.exe -X POST localhost:8080/v1/text -H "Content-Type: application/json" -d "
 curl.exe -X POST "localhost:8080/v1/utterance?rate=16000" -H "Transfer-Encoding: chunked" --data-binary "@frase.pcm"
 ```
 
+Endpoint per notifiche (inoltrati al servizio notify, vedi [notifiche](/agent/notifications.md)): `GET /v1/notifications/next?device=` (polling della scheda) e `POST /v1/notifications/{id}/ack`.
+
 Flusso interno in [pipeline](/agent/pipeline.md).

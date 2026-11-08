@@ -6,8 +6,11 @@ services:
     env_file: .env
     environment:
       QDRANT_URL: http://qdrant:6333   # memoria preferenze; togliere/svuotare per disattivarla
+      NOTIFY_URL: http://notify:8080   # promemoria e notifiche; vuoto = funzioni disattivate
+      NOTIFY_TOKEN: ${NOTIFY_TOKEN:-}
     depends_on:
       - qdrant
+      - notify
     volumes:
       - whisper-models:/models/hf   # cache del modello STT
       - fastembed-models:/models/fastembed   # cache del modello di embedding (preferenze)
@@ -19,7 +22,16 @@ services:
     volumes:
       - qdrant-data:/qdrant/storage  # preferenze degli utenti (dati personali, solo locali)
     restart: unless-stopped
+  notify:
+    build: ../notify   # servizio eventi separato dall'agente: nessuna porta pubblicata
+    environment:
+      NOTIFY_TOKEN: ${NOTIFY_TOKEN:?imposta NOTIFY_TOKEN in agent/.env}
+      NOTIFY_DB: /data/notify.db
+    volumes:
+      - notify-data:/data           # timer e promemoria (dati personali, solo locali)
+    restart: unless-stopped
 volumes:
+  notify-data:
   whisper-models:
   fastembed-models:
   speaker-data:

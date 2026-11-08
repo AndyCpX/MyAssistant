@@ -10,9 +10,12 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from . import skills
+from . import notify_client, skills
 
 APP_NAME = "jarvis"
+
+# Dispositivo e parlante della richiesta in corso: servono al tool set_reminder per scegliere il destinatario.
+_request: ContextVar[dict] = ContextVar("request", default={})
 _GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
 _MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto",
          "settembre", "ottobre", "novembre", "dicembre"]
@@ -22,6 +25,26 @@ def get_current_time() -> str:
     """Data e ora attuali nel fuso orario locale, inserite nel prompt a ogni richiesta."""
     now = datetime.now(ZoneInfo(os.getenv("AGENT_TIMEZONE", "Europe/Rome")))
     return f"{_GIORNI[now.weekday()]} {now.day} {_MESI[now.month - 1]} {now.year}, ore {now.hour}:{now.minute:02d}"
+
+
+async def set_reminder(text: str, minutes_from_now: int = 0) -> str:
+    """Programma un promemoria o un timer per la persona che sta parlando.
+
+    Args:
+        text: cosa ricordare, scritto come messaggio da dire ad alta voce (es. "Devi comprare il latte.").
+        minutes_from_now: tra quanti minuti ricordarlo. 0 = appena possibile, alla prossima
+            interazione con quella persona (o subito sul dispositivo se non e' riconosciuta).
+    """
+    if not notify_client.enabled():
+        return "Il servizio promemoria non è attivo."
+    req = _request.get()
+    speaker = req.get("speaker")
+    target = notify_client.person_target(speaker) if speaker else f"device:{req.get('device', 'unknown')}"
+    try:
+        await notify_client.create(text.strip()[:500], target, minutes_from_now=minutes_from_now)
+    except Exception:
+        return "Non sono riuscito a salvare il promemoria."
+    return "Promemoria salvato."
 
 
 def build_agent() -> LlmAgent:
@@ -54,7 +77,7 @@ def build_agent() -> LlmAgent:
         name="jarvis",
         model=model,
         description="Assistente vocale domestico.",
-        tools=skills.all_tools(),
+        tools=[set_reminder] + skills.all_tools(),
         instruction=lambda _ctx: f"Adesso è {get_current_time()}. " + base + skills.index_text() + skills.bodies_text() + _memory_text(),
     )
 
@@ -81,6 +104,7 @@ class Assistant:
                   memories: list[str] | None = None) -> str:
         """Una conversazione separata per ogni persona riconosciuta (e una per gli ospiti)."""
         _memories.set(memories or [])
+        _request.set({"device": device_id, "speaker": speaker})
         await skills.activate(f"{device_id}:{speaker or 'ospite'}", text)
         sid = f"{device_id}:{speaker or 'ospite'}"
         if sid not in self._known:
