@@ -65,12 +65,21 @@ def device_id(req: Request) -> str:
     return req.headers.get("x-device-id") or (req.client.host if req.client else "unknown")
 
 
-def result(transcript: str, reply: str, follow_up: bool | None = None, who: speaker.Match | None = None) -> dict:
+# Promemoria personali letti in una risposta: confermati solo quando l'audio viene scaricato per intero.
+_reply_acks: dict[str, tuple[str, str]] = {}   # rid -> (id notifica, dispositivo)
+
+
+def result(transcript: str, reply: str, follow_up: bool | None = None, who: speaker.Match | None = None,
+           on_play: tuple[str, str] | None = None) -> dict:
     # "label" e "audio" restano per primi: il firmware li cerca nei primi 512 byte.
     reply = tts.speech_text(reply)
     out: dict = {"label": "ok"}
     if reply and tts.enabled():
-        out["audio"] = f"/v1/reply/{tts.register(reply)}"   # PCM16 16 kHz mono, scaricabile con GET
+        rid = tts.register(reply)
+        out["audio"] = f"/v1/reply/{rid}"   # PCM16 16 kHz mono, scaricabile con GET
+        if on_play:
+            _reply_acks[rid] = on_play
+    # Senza TTS non c'e' audio da scaricare: il promemoria non viene confermato e il lease lo ripropone.
     # Domanda o richiesta di chiarimento: il dispositivo resta in ascolto senza nuova wake word.
     out["follow_up"] = reply.rstrip().endswith("?") if follow_up is None else follow_up
     if who is not None:   # "role" servirà per limitare in futuro alcune funzioni a certe persone
@@ -137,51 +146,52 @@ async def utterance(req: Request, rate: int = 16000) -> dict:
     reply = await assistant.ask(dev, text, who.name if who else None, memories=mems)
     if user:   # dopo la risposta, senza bloccarla
         asyncio.create_task(memory.observe(user, text, dev))
+    on_play = None
     if notify_client.enabled():
-        reply = await _with_reminder(dev, who.name if who else None, reply)
+        reply, on_play = await _with_reminder(dev, who.name if who else None, reply)
     log.info("risposta: %r", reply)
     log.info("TEMPI stt=%.1fs voce=%.1fs llm=%.1fs totale=%.1fs (audio %d ms)",
              t_stt, t_spk, time.monotonic() - t0, time.monotonic() - t_end, ms)
-    return result(text, reply, who=who)
+    return result(text, reply, who=who, on_play=on_play)
 
 
-async def _with_reminder(dev: str, speaker: str | None, reply: str) -> str:
-    """Aggiunge alla risposta il prossimo promemoria per questo dispositivo/persona, poi lo conferma."""
+async def _with_reminder(dev: str, speaker: str | None, reply: str) -> tuple[str, tuple[str, str] | None]:
+    """Aggiunge alla risposta il promemoria della persona riconosciuta. Non lo conferma qui:
+    la conferma arriva quando l'audio viene scaricato (vedi reply_audio)."""
+    if not speaker:
+        return reply, None
     try:
         n = await notify_client.pending(dev, speaker)
-        if not n:
-            return reply
-        await notify_client.ack(n["id"], dev)   # letto in questa risposta: non va ripetuto
     except Exception:
         log.exception("promemoria non disponibili")
-        return reply
-    return f"{reply} {n['text']}".strip()
+        return reply, None
+    if not n:
+        return reply, None
+    return f"{reply} {n['text']}".strip(), (n["id"], dev)
 
 
-@app.get("/v1/notifications/next")
-async def next_notification(req: Request) -> dict:
-    """Polling della scheda: un evento alla volta, con audio come una risposta normale."""
+async def _ack_quietly(nid: str, dev: str) -> None:
+    try:
+        await notify_client.ack(nid, dev)
+    except Exception:
+        log.exception("conferma promemoria %s non riuscita: la riproporra' il lease", nid)
+
+
+@app.post("/v1/notifications/{nid}/speak")
+async def speak_notification(req: Request, nid: str) -> dict:
+    """La scheda, dopo il messaggio MQTT, chiede il testo da dire. Solo per notifiche destinate a lei.
+    La conferma la invia la scheda via MQTT dopo la riproduzione."""
     check_auth(req)
     if not notify_client.enabled():
-        return {"label": "none"}
+        raise HTTPException(404, "notifiche non attive")
+    dev = device_id(req)
     try:
-        n = await notify_client.pending(device_id(req))
-    except Exception:
-        log.exception("polling notifiche fallito")
-        raise HTTPException(503, "servizio notifiche non raggiungibile")
-    if not n:
-        return {"label": "none"}
-    return result("", n["text"], follow_up=False) | {"id": n["id"]}
-
-
-@app.post("/v1/notifications/{nid}/ack", status_code=204)
-async def ack_notification(req: Request, nid: str) -> Response:
-    check_auth(req)
-    try:
-        await notify_client.ack(nid, device_id(req))
+        n = await notify_client.get(nid)
     except Exception:
         raise HTTPException(503, "servizio notifiche non raggiungibile")
-    return Response(status_code=204)
+    if n is None or n["target"] not in ("all", f"device:{dev}"):
+        raise HTTPException(404, "notifica sconosciuta")
+    return result("", n["text"], follow_up=False) | {"id": nid}
 
 
 class TextIn(BaseModel):
@@ -204,6 +214,8 @@ async def reply_audio(req: Request, rid: str) -> Response:
         raise HTTPException(404, "risposta scaduta o inesistente")
     if not pcm:
         raise HTTPException(502, "sintesi vocale non disponibile")
+    if (pending := _reply_acks.pop(rid, None)) is not None:   # audio scaricato: promemoria consegnato
+        asyncio.create_task(_ack_quietly(*pending))
     return Response(pcm, media_type="audio/L16;rate=16000")
 
 

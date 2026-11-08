@@ -27,11 +27,30 @@ services:
     environment:
       NOTIFY_TOKEN: ${NOTIFY_TOKEN:?imposta NOTIFY_TOKEN in agent/.env}
       NOTIFY_DB: /data/notify.db
+      NOTIFY_DEVICES: ${NOTIFY_DEVICES:-}                 # schede che ricevono le notifiche "all"
+      NOTIFY_SOURCE_TOKENS: ${NOTIFY_SOURCE_TOKENS:-}     # ci=<token>,ha=<token>
+      MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+      MQTT_USER: notify
+      MQTT_PASSWORD: ${MQTT_NOTIFY_PASSWORD:?imposta MQTT_NOTIFY_PASSWORD in agent/.env}
+    depends_on:
+      - mqtt
     volumes:
       - notify-data:/data           # timer e promemoria (dati personali, solo locali)
     restart: unless-stopped
+  mqtt:
+    # Broker per le schede. Pubblica la porta 1883 sulla LAN: accesso solo con utente/password e ruoli
+    # (dynamic-security, vedi mosquitto/README.md). Sul broker transitano solo id e priorita', mai il testo.
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt-data:/mosquitto/data   # utenti e ruoli (dynamic-security.json) e sessioni persistenti
+    restart: unless-stopped
 volumes:
   notify-data:
+  mqtt-data:
   whisper-models:
   fastembed-models:
   speaker-data:

@@ -47,6 +47,16 @@ async def pending(device: str, speaker: str | None = None) -> dict | None:
         return r.json()["notification"]
 
 
+async def get(nid: str) -> dict | None:
+    """Notifica per id (None se sconosciuta o annullata)."""
+    async with httpx.AsyncClient(timeout=5) as c:
+        r = await c.get(f"{_base()}/v1/notifications/{nid}", headers=_headers())
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return r.json()
+
+
 async def ack(nid: str, device: str) -> None:
     async with httpx.AsyncClient(timeout=5) as c:
         r = await c.post(f"{_base()}/v1/notifications/{nid}/ack", params={"device": device},

@@ -3,9 +3,11 @@
 Modello:
 - una notifica ha un destinatario (`target`): "all", "device:<id>" oppure "person:<nome>";
 - e' consegnabile quando `deliver_at` e' passato e non e' scaduta/annullata;
-- ogni dispositivo ha una riga in `deliveries`: il "lease" (prestito temporaneo) evita che una
-  notifica venga ripetuta mentre la scheda la sta riproducendo; se la scheda non conferma
-  entro LEASE_S secondi, la notifica torna disponibile (es. scheda spenta a meta' riproduzione).
+- ogni (notifica, dispositivo) ha una riga in `deliveries` con un "lease" (prestito temporaneo):
+  il servizio pubblica su MQTT e, finche' il lease e' valido, non ripubblica. Se il dispositivo
+  non conferma (ack) entro LEASE_S secondi, la notifica torna pubblicabile (es. scheda spenta).
+- `person:<nome>` non passa da MQTT: viene consegnata quando la persona riconosciuta parla
+  con la scheda (`person_next`), perche' la voce e' l'unico momento in cui sappiamo chi c'e'.
 """
 import re
 import sqlite3
@@ -48,6 +50,15 @@ def utcnow() -> datetime:
 def iso(dt: datetime) -> str:
     # Formato fisso in UTC: il confronto tra stringhe in SQL equivale al confronto tra date.
     return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _expand(target: str, devices: list[str]) -> list[str]:
+    """Dispositivi a cui va una notifica. Solo quelli configurati: un id sconosciuto non riceve nulla."""
+    if target == "all":
+        return list(devices)
+    if target.startswith("device:") and target[7:] in devices:
+        return [target[7:]]
+    return []
 
 
 class Store:
@@ -104,33 +115,67 @@ class Store:
         )
         return True
 
+    def claim(self, nid: str, device: str) -> None:
+        """Pubblicazione avvenuta: il lease impedisce di ripubblicare prima di LEASE_S secondi."""
+        lease = iso(utcnow() + timedelta(seconds=LEASE_S))
+        self._run(
+            "INSERT INTO deliveries (notification_id, device, lease_until) VALUES (?,?,?) "
+            "ON CONFLICT(notification_id, device) DO UPDATE SET lease_until=excluded.lease_until",
+            (nid, device, lease),
+        )
+
     # --- lettura -----------------------------------------------------------
 
-    def next_for(self, device: str, speaker: str | None = None) -> dict | None:
-        """La prossima notifica consegnabile a questo dispositivo, con lease. None se non c'e' nulla."""
+    def to_publish(self, devices: list[str], limit: int = 100) -> list[tuple[dict, str]]:
+        """Coppie (notifica, dispositivo) da pubblicare ora: dovute, non confermate, lease scaduto."""
+        now_s = iso(utcnow())
+        rows = self._run(
+            """
+            SELECT * FROM notifications
+            WHERE cancelled = 0 AND deliver_at <= :now
+              AND (expires_at IS NULL OR expires_at > :now)
+              AND target NOT LIKE 'person:%'
+            ORDER BY CASE priority WHEN 'high' THEN 0 ELSE 1 END, deliver_at
+            LIMIT :limit
+            """,
+            {"now": now_s, "limit": limit},
+        )
+        out: list[tuple[dict, str]] = []
+        for row in rows:
+            n = _to_dict(row)
+            for dev in _expand(n["target"], devices):
+                st = self._run(
+                    "SELECT acked_at, lease_until FROM deliveries WHERE notification_id=? AND device=?",
+                    (n["id"], dev),
+                )
+                if st and (st[0]["acked_at"] or (st[0]["lease_until"] or "") > now_s):
+                    continue
+                out.append((n, dev))
+        return out
+
+    def person_next(self, device: str, speaker: str) -> dict | None:
+        """Promemoria per la persona riconosciuta che sta parlando, con lease. None se non c'e' nulla."""
         with self._lock:
-            now = utcnow()
-            now_s = iso(now)
-            person = f"person:{speaker.lower()}" if speaker else None
+            now_s = iso(utcnow())
             row = self._db.execute(
                 """
                 SELECT n.* FROM notifications n
                 WHERE n.cancelled = 0
                   AND n.deliver_at <= :now
                   AND (n.expires_at IS NULL OR n.expires_at > :now)
-                  AND (n.target = 'all' OR n.target = :dev OR n.target = :person)
+                  AND n.target = :person
                   AND NOT EXISTS (
                       SELECT 1 FROM deliveries d
-                      WHERE d.notification_id = n.id AND d.device = :raw
+                      WHERE d.notification_id = n.id AND d.device = :dev
                         AND (d.acked_at IS NOT NULL OR d.lease_until > :now))
                 ORDER BY CASE n.priority WHEN 'high' THEN 0 ELSE 1 END, n.deliver_at
                 LIMIT 1
                 """,
-                {"now": now_s, "dev": f"device:{device}", "raw": device, "person": person},
+                {"now": now_s, "dev": device, "person": f"person:{speaker.lower()}"},
             ).fetchone()
             if row is None:
                 return None
-            lease = iso(now + timedelta(seconds=LEASE_S))
+            lease = iso(utcnow() + timedelta(seconds=LEASE_S))
             self._db.execute(
                 "INSERT INTO deliveries (notification_id, device, lease_until) VALUES (?,?,?) "
                 "ON CONFLICT(notification_id, device) DO UPDATE SET lease_until=excluded.lease_until",
@@ -138,6 +183,10 @@ class Store:
             )
             self._db.commit()
             return _to_dict(row)
+
+    def get(self, nid: str) -> dict | None:
+        rows = self._run("SELECT * FROM notifications WHERE id=?", (nid,))
+        return _to_dict(rows[0]) if rows else None
 
     def list(self, limit: int = 50) -> list[dict]:
         rows = self._run("SELECT * FROM notifications ORDER BY created_at DESC LIMIT ?", (limit,))

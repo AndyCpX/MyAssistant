@@ -34,7 +34,9 @@ curl -X POST http://localhost:8081/v1/events -H "Authorization: Bearer $NOTIFY_T
 ```
 
 ## Regole
-- `target`: `all`, `device:<id>`, `person:<nome>`.
-- Una scheda riceve una notifica alla volta e la conferma con l'ack; senza ack, dopo 60 s la notifica torna disponibile.
+- `target`: `all` (tutte le schede in `NOTIFY_DEVICES`), `device:<id>` (una scheda), `person:<nome>` (promemoria letto quando la persona parla).
+- Le notifiche per scheda arrivano via MQTT su `jarvis/notify/<id>`; la scheda conferma su `jarvis/ack/<id>`. Senza conferma entro 60 s la notifica viene ripubblicata.
+- I promemoria `person:` non passano da MQTT: l'agente li legge con `GET /v1/pending` e li conferma dopo il download dell'audio.
 - `dedupe_key` + `source` identificano un evento: ripeterlo non crea un duplicato.
-- Il servizio non parla con l'ESP32: la consegna passa dall'agente.
+- Il servizio non è esposto sulla LAN: il broker MQTT (vedi `agent/mosquitto/README.md`) è l'unico punto di contatto con le schede.
+- Variabili MQTT: `MQTT_HOST`, `MQTT_PORT`, `MQTT_USER`, `MQTT_PASSWORD`. Senza `MQTT_HOST` il servizio gira senza consegna alle schede (utile nei test).

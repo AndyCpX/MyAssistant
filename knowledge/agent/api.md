@@ -29,6 +29,6 @@ curl.exe -X POST localhost:8080/v1/text -H "Content-Type: application/json" -d "
 curl.exe -X POST "localhost:8080/v1/utterance?rate=16000" -H "Transfer-Encoding: chunked" --data-binary "@frase.pcm"
 ```
 
-Endpoint per notifiche (inoltrati al servizio notify, vedi [notifiche](/agent/notifications.md)): `GET /v1/notifications/next?device=` (polling della scheda) e `POST /v1/notifications/{id}/ack`.
+Endpoint per notifiche (vedi [notifiche](/agent/notifications.md)): `POST /v1/notifications/{id}/speak` (la scheda chiede il testo di una notifica ricevuta via MQTT e riceve l'audio; header `X-Device-Id`). La conferma delle notifiche per scheda avviene via MQTT, non via HTTP.
 
 Flusso interno in [pipeline](/agent/pipeline.md).

@@ -1,8 +1,8 @@
 ---
 type: Design
-title: Notifiche, promemoria e timer (servizio notify)
-description: Servizio eventi separato dall'agente (notify/) con coda su SQLite, consegna per dispositivo o persona e lease; l'agente lo usa per promemoria e polling della scheda.
-tags: [notifiche, promemoria, timer, sqlite, lease]
+title: Notifiche, promemoria e timer (servizio notify + MQTT)
+description: Servizio eventi separato dall'agente (notify/) con coda SQLite; le notifiche per scheda arrivano via MQTT (Mosquitto), i promemoria personali via agente quando la persona parla.
+tags: [notifiche, promemoria, timer, sqlite, mqtt, lease]
 status: implemented-backend
 generated: { by: ai:claude, at: 2026-11-08T00:00:00Z }
 ---
@@ -10,35 +10,54 @@ generated: { by: ai:claude, at: 2026-11-08T00:00:00Z }
 # Notifiche, promemoria e timer
 
 ## Perché un servizio separato
-Le sorgenti (CI, Home Assistant, timer) non devono dipendere da LLM, STT o TTS, che stanno nell'agente e si caricano lentamente. I timer devono sopravvivere al rebuild dell'agente. Il servizio è in `notify/` con un proprio volume (`notify-data`) e un proprio token (`NOTIFY_TOKEN`). Non pubblica porte: l'ESP32 parla solo con l'agente.
+Le sorgenti (CI, Home Assistant, timer) non devono dipendere da LLM, STT o TTS, che stanno nell'agente e si caricano lentamente. I timer devono sopravvivere al rebuild dell'agente. Il servizio è in `notify/` con un proprio volume (`notify-data`). Non è raggiungibile dalla LAN: le schede non gli parlano direttamente.
+
+## Percorsi di consegna
+- **Notifiche per scheda** (`all`, `device:<id>`): il servizio pubblica su MQTT `jarvis/notify/<id>` un messaggio `{id, priority}`. La scheda conferma su `jarvis/ack/<id>` dopo la riproduzione. Il testo non va sul broker: la scheda lo chiede all'agente con `POST /v1/notifications/{id}/speak`.
+- **Promemoria personali** (`person:<nome>`): non passano da MQTT. Vengono aggiunti alla risposta vocale quando la persona riconosciuta parla con la scheda. La conferma arriva quando la scheda scarica l'audio di quella risposta (`GET /v1/reply/{rid}`).
+
+Dettagli del broker, utenti e ruoli: [mosquitto/README.md](/agent/mosquitto/README.md) nel repo.
 
 ## Modello
-- **Destinatario** (`target`): `all`, `device:<id>` o `person:<nome>` (il nome è normalizzato: minuscolo, spazi sostituiti da `_`).
+- **Destinatario** (`target`): `all`, `device:<id>` o `person:<nome>` (il nome è normalizzato: minuscolo, spazi sostituiti da `_`). `all` va solo ai dispositivi in `NOTIFY_DEVICES`.
 - **Consegna**: una notifica è consegnabile quando `deliver_at` è passato e non è scaduta o annullata. Ordine: `priority` (high prima), poi `deliver_at`.
-- **Lease**: `GET /v1/pending` concede 60 s di prestito per (notifica, dispositivo). Se la scheda non conferma con l'ack (es. spenta durante la riproduzione), la notifica torna disponibile.
-- **Ack**: `POST /v1/notifications/{id}/ack?device=…` la chiude per quel dispositivo; per `all` ogni dispositivo la riceve una volta.
+- **Lease**: dopo ogni pubblicazione (o consegna di un promemoria) la coppia (notifica, dispositivo) ha 60 s di prestito. Senza conferma entro il lease, la notifica viene ripubblicata: così una scheda spenta non fa perdere nulla.
+- **Ack**: chiude la coppia (notifica, dispositivo); non viene più ripubblicata.
 - **Deduplica**: `dedupe_key` con `source` evita doppioni (es. retry della CI).
+- **Limiti**: 30 eventi al minuto per sorgente (`NOTIFY_RATE_PER_MIN`); testo max 500 caratteri.
 
-## API del servizio notify (token `Bearer NOTIFY_TOKEN`)
-| Metodo | Percorso | Uso |
-|---|---|---|
-| POST | `/v1/events` | crea notifica o timer (`deliver_at` con fuso obbligatorio) |
-| GET | `/v1/pending?device=&speaker=` | prossima notifica con lease |
-| POST | `/v1/notifications/{id}/ack?device=` | conferma |
-| GET | `/v1/notifications` | elenco per debug |
-| DELETE | `/v1/notifications/{id}` | annulla (idempotente) |
+## Sorgenti e token
+- `NOTIFY_TOKEN`: agente (lettura, promemoria personali, ack, speak). Accesso completo.
+- `NOTIFY_SOURCE_TOKENS=ci=<token>,ha=<token>`: sorgenti che possono solo creare eventi. La sorgente è quella associata al token, non quella dichiarata nel corpo.
+
+## API del servizio notify
+| Metodo | Percorso | Chi | Uso |
+|---|---|---|---|
+| POST | `/v1/events` | sorgenti, agente | crea notifica o timer (`deliver_at` con fuso obbligatorio) |
+| GET | `/v1/pending?device=&speaker=` | agente | promemoria della persona, con lease |
+| GET | `/v1/notifications/{id}` | agente | testo di una notifica (per lo speak) |
+| POST | `/v1/notifications/{id}/ack?device=` | agente | conferma di un promemoria personale |
+| GET | `/v1/notifications` | operatore | elenco per debug |
+| DELETE | `/v1/notifications/{id}` | operatore | annulla (idempotente) |
+
+## Broker MQTT
+- Mosquitto 2 nel compose, porta 1883 sulla LAN, senza anonimi.
+- Plugin `dynamic-security`, default deny. Ogni scheda ha un ruolo con solo `jarvis/notify/<id>` (lettura) e `jarvis/ack/<id>` (scrittura).
+- Verificato: scheda senza permesso negata su altri topic e su pubblicazioni altrui; anonimi rifiutati; consegna e ack end-to-end nello stack compose.
+- Il file delle ACL (`acl`) è stato abbandonato: con Mosquitto il default era «consenti».
 
 ## Come lo usa l'agente
 - Tool ADK `set_reminder(text, minutes_from_now)`: il destinatario è la persona riconosciuta (`person:`) o, se ignota, il dispositivo. Il contesto della richiesta arriva da un `ContextVar`, come per la memoria.
-- Alla risposta vocale di una persona riconosciuta, il primo promemoria pendente viene aggiunto alla risposta e confermato.
-- `GET /v1/notifications/next` (polling della scheda, restituisce `audio` come una risposta normale) e `POST /v1/notifications/{id}/ack` sull'agente: da usare dal firmware.
+- Endpoint `POST /v1/notifications/{id}/speak`: restituisce `audio` come una risposta normale, solo se la notifica è destinata a quel dispositivo (`X-Device-Id`).
 
 ## Stato
-- Servizio notify: implementato e coperto da test (17 test di API e coda).
-- Agente: tool e integrazione implementati, non ancora provati con Docker e con un modello reale.
-- Firmware: stato di polling non ancora implementato (vedi [firmware](/firmware/index.md)).
+- Servizio notify: implementato, 27 test (API, coda, MQTT con client finto).
+- Broker: verificato nello stack compose con schede simulate (paho).
+- Agente: tool, speak e promemoria personali implementati; non ancora provati con il modello reale né con il container dell'agente aggiornato.
+- Firmware: client MQTT non ancora implementato.
 
 ## Limiti noti
 - Notifiche per persona consegnate solo a voce riconosciuta; nessun canale per chi non parla.
-- La scheda deve fare polling (latenza di 20–30 s); nessuna spinta in tempo reale.
-- Nessun orario di silenzio ancora; da aggiungere lato firmware o servizio.
+- Il traffico MQTT è in chiaro sulla LAN (nessun TLS): accettabile finché il broker non esce dalla LAN.
+- Nessun orario di silenzio; da aggiungere lato servizio o firmware.
+- Il promemoria personale senza TTS attivo non viene confermato: il lease lo ripropone.
