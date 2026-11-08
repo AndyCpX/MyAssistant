@@ -25,6 +25,7 @@ assistant: Assistant
 async def lifespan(_: FastAPI):
     global assistant
     await asyncio.to_thread(stt.load)  # evita la latenza del primo enunciato
+    await asyncio.to_thread(tts.warmup)
     if speaker.enabled():
         await asyncio.to_thread(speaker.load)
     try:   # i comandi girano come utente senza privilegi: /data (voci registrate) deve restare illeggibile per lui

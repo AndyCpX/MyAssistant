@@ -18,7 +18,9 @@ Servizio Python 3.12 (FastAPI + Google ADK) in `agent/`, eseguito in Docker.
    Le voci registrate sono dati biometrici, restano nel volume Docker `speaker-data`.
 4. **Agente** (`agent.py`): `LlmAgent` ADK via LiteLLM; tool `get_current_time` (fuso `AGENT_TIMEZONE`, default Europe/Rome);
    risposte brevi (`LLM_MAX_TOKENS`, default 160) perché vengono parlate. Sessione per dispositivo in memoria.
-5. **TTS** (`tts.py`): ElevenLabs (modello `eleven_flash_v2_5`); senza chiave nessuna risposta vocale.
+5. **TTS** (`tts.py`): Kokoro-82M locale (`kokoro-onnx`, voce italiana `if_sara`, ~0,5 s per frase su CPU, ricampionato da 24 a 16 kHz) di default;
+   ElevenLabs (`eleven_flash_v2_5`) fa da ripiego se Kokoro fallisce o manca, oppure da motore principale con `TTS_ENGINE=elevenlabs`.
+   Senza nessuno dei due nessuna risposta vocale.
    L'audio è scaricabile con `GET /v1/reply/{rid}`.
 6. **Uscita**: `{"label","transcript","reply"}` più eventuali campi su follow-up e parlante.
 

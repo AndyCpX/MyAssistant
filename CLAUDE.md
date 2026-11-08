@@ -44,7 +44,7 @@ Lingua del progetto e dei commenti: italiano.
 ## Agente (`agent/`, Python 3.12, FastAPI + Google ADK)
 - Avvio: `cd agent; copy .env.example .env; docker compose up --build` (porta 8080). `.env` non è versionato.
 - Pipeline: audio PCM16 16 kHz mono -> STT (ElevenLabs Scribe, ripiego faster-whisper locale) -> agente ADK (LiteLLM,
-  default Ollama Cloud) -> TTS ElevenLabs; in parallelo riconoscimento parlante (sherpa-onnx, soglia `SPEAKER_THRESHOLD`).
+  default Ollama Cloud) -> TTS Kokoro locale (`TTS_ENGINE`, ripiego ElevenLabs); in parallelo riconoscimento parlante (sherpa-onnx, soglia `SPEAKER_THRESHOLD`).
 - Endpoint: `GET /healthz`, `POST /v1/utterance?rate=16000` (-> `{"label","transcript","reply"}`), `POST /v1/text`,
   `GET /v1/reply/{rid}` (audio risposta), `GET /v1/speakers`, `POST /v1/speakers/{name}/rename`, `DELETE /v1/speakers/{name}`.
 - Auth opzionale con `AGENT_TOKEN` (Bearer). Sessione per dispositivo via header `X-Device-Id` (altrimenti IP), in memoria.

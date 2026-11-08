@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 RUN mkdir -p /data /models/fastembed && FASTEMBED_CACHE_PATH=/models/fastembed python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', cache_dir='/models/fastembed')"
 RUN mkdir -p /data && python -c "import urllib.request as u; u.urlretrieve('https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx', '/models/speaker.onnx')"
+RUN mkdir -p /models/kokoro && curl -fsSL -o /models/kokoro/kokoro-v1.0.onnx https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.0.onnx && curl -fsSL -o /models/kokoro/voices-v1.0.bin https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.0.bin
 COPY app ./app
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=120s CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/healthz')"

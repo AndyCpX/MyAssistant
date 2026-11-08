@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-11-08
+- **Update**: [pipeline](/agent/pipeline.md) e [configuration](/agent/configuration.md): TTS locale con Kokoro (kokoro-onnx, voce `if_sara`) come default, ElevenLabs come ripiego (`TTS_ENGINE`); provato in italiano nel container (RTF ~0,15), ripiego verificato.
+
 ## 2026-11-07
 - **Update**: [skills](/agent/skills.md): luci.py per accendere/spegnere le luci in una chiamata; causa di "spegni tutte" trovata nel limite 429 di Netatmo.
 - **Update**: [skills](/agent/skills.md): gli switch senza device_class sono trattati come luci in Home Assistant; letture verificate.

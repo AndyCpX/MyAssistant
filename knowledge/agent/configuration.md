@@ -30,7 +30,9 @@ L'immagine scarica il modello speaker wespeaker al build ed espone un healthchec
 | `LLM_MODEL`, `LLM_API_BASE`, `LLM_API_KEY` | qualsiasi modello LiteLLM (default Ollama Cloud) |
 | `LLM_THINK=false` | niente ragionamento nella risposta: più pulita e veloce per la voce |
 | `STT_ENGINE`, `STT_MODEL`, `STT_LANGUAGE`, `STT_COMPUTE_TYPE`, `STT_COMPARE`, `STT_PROMPT` | riconoscimento vocale |
-| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL` | sintesi vocale |
+| `TTS_ENGINE` (`kokoro` default \| `elevenlabs`) | motore principale della sintesi; l'altro, se configurato, è il ripiego |
+| `KOKORO_VOICE` (`if_sara`, `im_nicola`), `KOKORO_SPEED`, `KOKORO_LANG` (`it`) | voce Kokoro locale (modello in `/models/kokoro`, scaricato al build) |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL` | ElevenLabs (opzionale) |
 | `SPEAKER_THRESHOLD` | similarità minima 0-1 per riconoscere un parlante |
 | `AGENT_TOKEN`, `AGENT_LANGUAGE`, `AGENT_TIMEZONE` | accesso, lingua delle risposte, fuso orario |
 
