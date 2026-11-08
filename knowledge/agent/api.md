@@ -16,6 +16,8 @@ generated: { by: ai:claude, at: 2026-11-07T00:00:00Z }
 | POST | `/v1/text` | `{"text": "..."}` -> risposta senza audio, per test |
 | GET | `/v1/reply/{rid}` | audio della risposta sintetizzata |
 | GET | `/v1/speakers` | elenco dei parlanti registrati |
+| GET | `/v1/devices` | schede che hanno interagito con l'agente dall'ultimo riavvio (ultima interazione, ultimo parlante) |
+| POST | `/v1/notifications/{id}/speak` | testo e audio di una notifica per la scheda (solo se destinata a lei, header `X-Device-Id`) |
 | POST | `/v1/speakers/{name}/rename?to=...` | rinomina un parlante |
 | DELETE | `/v1/speakers/{name}` | elimina un parlante |
 

@@ -128,6 +128,7 @@ async def utterance(req: Request, rate: int = 16000) -> dict:
         timed(asyncio.to_thread(stt.transcribe, pcm, rate)), timed(identify()))
     log.info("%s: %d ms -> %r (voce: %s %.2f)", dev, ms, text,
              who.name if who else "-", who.score if who else 0)
+    _seen(dev, who.name if who else None)
 
     if (flow := await asyncio.to_thread(enrollment.handle, dev, text, pcm, rate)) is not None:
         log.info("registrazione voce: %r", flow[0])
@@ -202,7 +203,23 @@ class TextIn(BaseModel):
 async def text(req: Request, body: TextIn) -> dict:
     """Come /v1/utterance ma con testo già trascritto (utile per test con curl)."""
     check_auth(req)
+    _seen(device_id(req))
     return result(body.text, await assistant.ask(device_id(req), body.text))
+
+
+# Ultima interazione per dispositivo, in memoria (si azzera al riavvio). Non e' un heartbeat:
+# una scheda che non parla non compare come "attiva" finche' non interagisce di nuovo.
+_devices: dict[str, dict] = {}
+
+
+def _seen(dev: str, speaker_name: str | None = None) -> None:
+    _devices[dev] = {"last_seen": time.time(), "last_speaker": speaker_name}
+
+
+@app.get("/v1/devices")
+async def list_devices(req: Request) -> list[dict]:
+    check_auth(req)
+    return [{"device": d, **v} for d, v in sorted(_devices.items(), key=lambda kv: -kv[1]["last_seen"])]
 
 
 @app.get("/v1/reply/{rid}")

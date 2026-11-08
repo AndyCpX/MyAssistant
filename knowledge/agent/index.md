@@ -6,4 +6,5 @@
 - [Memoria utente](./user-memory.md) - preferenze con Qdrant: implementata, da provare end to end
 - [Skill](./skills.md) - skill SKILL.md con istruzioni, tool http e python e comandi scelti dall'LLM
 - [Notifiche](./notifications.md) - promemoria, timer e notifiche dal servizio notify (implementato, backend)
+- [Console](./console.md) - diagnostica personale: dispositivi, persone, memorie redatte, notifiche, skill da zip e audit (implementata, MVP)
 - [Telemetria](./telemetry.md) - progetto Phoenix, SQLite e Grafana per sessioni, costi e metriche ESP32 (bozza)

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS console</title>
+<style>
+  :root { --bg:#f6f7f9; --fg:#1d232b; --muted:#6b7480; --line:#dde1e7; --card:#fff; --accent:#2f6fdb; --warn:#b45309; --bad:#b91c1c; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#15181d; --fg:#e6e9ee; --muted:#9aa3ae; --line:#2b313a; --card:#1d2229; --accent:#6ea8ff; --warn:#f59e0b; --bad:#f87171; } }
+  :root[data-theme="dark"] { --bg:#15181d; --fg:#e6e9ee; --muted:#9aa3ae; --line:#2b313a; --card:#1d2229; --accent:#6ea8ff; --warn:#f59e0b; --bad:#f87171; }
+  body { margin:0; font:15px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--card); }
+  header h1 { font-size:17px; margin:0 auto 0 0; }
+  nav button { background:none; border:0; padding:8px 10px; color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; font:inherit; }
+  nav button.on { color:var(--fg); border-color:var(--accent); }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  table { width:100%; border-collapse:collapse; background:var(--card); }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:13px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px; }
+  button.act { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  button.ghost { background:none; color:var(--accent); border:1px solid var(--line); border-radius:6px; padding:5px 10px; cursor:pointer; font:inherit; }
+  input[type=password], input[type=text] { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  .muted { color:var(--muted); font-size:13px; }
+  .err { color:var(--bad); }
+  .ok { color:var(--accent); }
+  .warn { color:var(--warn); }
+  .tag { display:inline-block; padding:1px 7px; border:1px solid var(--line); border-radius:999px; font-size:12px; color:var(--muted); margin-right:4px; }
+  .scroll { overflow-x:auto; }
+  @media (max-width:640px) { th, td { font-size:13px; padding:6px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>JARVIS console</h1>
+  <nav id="nav">
+    <button data-tab="devices" class="on">Dispositivi</button>
+    <button data-tab="persons">Persone</button>
+    <button data-tab="notifications">Notifiche</button>
+    <button data-tab="skills">Skill</button>
+    <button data-tab="audit">Audit</button>
+  </nav>
+  <span id="authbox"></span>
+</header>
+<main>
+  <div id="login" class="card" hidden>
+    <p>Inserisci il token della console (CONSOLE_TOKEN).</p>
+    <input type="password" id="tok" placeholder="token" autocomplete="off">
+    <button class="act" id="savetok">Entra</button>
+    <p class="muted">Il token resta solo in questa scheda del browser e si cancella chiudendola.</p>
+  </div>
+  <div id="view"></div>
+</main>
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const view = $("#view");
+let token = sessionStorage.getItem("jarvis-console-token") || "";
+
+// Tutti i dati dal server vanno inseriti come testo, mai come HTML.
+function el(tag, props = {}, ...children) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") n.className = v;
+    else if (k === "on") for (const [ev, fn] of Object.entries(v)) n.addEventListener(ev, fn);
+    else if (v !== undefined && v !== null) n.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c !== null && c !== undefined) n.append(c instanceof Node ? c : String(c));
+  return n;
+}
+
+async function api(path, opts = {}) {
+  const headers = { ...(opts.headers || {}), Authorization: "Bearer " + token };
+  const r = await fetch(path, { ...opts, headers });
+  if (r.status === 401) { showLogin(); throw new Error("token non valido"); }
+  if (!r.ok) {
+    let msg = "HTTP " + r.status;
+    try { msg = (await r.json()).detail || msg; } catch (_) {}
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+function showLogin() {
+  view.replaceChildren();
+  $("#login").hidden = false;
+  $("#authbox").textContent = "";
+}
+
+function table(headers, rows) {
+  return el("div", { class: "scroll" }, el("table", {},
+    el("thead", {}, el("tr", {}, headers.map((h) => el("th", {}, h)))),
+    el("tbody", {}, rows.length ? rows : el("tr", {}, el("td", { colspan: headers.length, class: "muted" }, "Nessun elemento")))));
+}
+
+function fmtTime(ts) {
+  if (!ts) return "—";
+  const d = typeof ts === "number" ? new Date(ts * 1000) : new Date(ts);
+  return isNaN(d) ? String(ts) : d.toLocaleString("it-IT");
+}
+
+function errorBox(e) { return el("p", { class: "err" }, "Errore: " + e.message); }
+
+function setView(...nodes) { view.replaceChildren(...nodes); }
+
+// ----- schede -----------------------------------------------------------
+async function devicesTab() {
+  const rows = (await api("/api/devices")).map((d) => el("tr", {},
+    el("td", {}, d.device), el("td", {}, fmtTime(d.last_seen)), el("td", {}, d.last_speaker || "ospite")));
+  setView(el("p", { class: "muted" }, "Schede che hanno interagito con l'agente, dall'ultimo riavvio. Non è un heartbeat: una scheda silenziosa non compare come attiva."),
+    table(["Dispositivo", "Ultima interazione", "Ultimo parlante"], rows));
+}
+
+// ----- persone e memorie ----------------------------------------------
+async function personsTab() {
+  const persons = await api("/api/persons");
+  const rows = persons.map((p) => el("tr", {},
+    el("td", {}, p.name), el("td", {}, p.role || "member"), el("td", {}, String(p.samples ?? "—")),
+    el("td", {}, Object.entries(p.memories || {}).map(([s, n]) => el("span", { class: "tag" }, `${s}: ${n}`)),
+      Object.keys(p.memories || {}).length ? null : el("span", { class: "muted" }, "nessuna")),
+    el("td", {}, el("button", { class: "ghost", on: { click: () => memoriesTab(p.name) } }, "memorie"))));
+  setView(table(["Nome", "Ruolo", "Campioni vocali", "Memorie per stato", ""], rows));
+}
+
+async function memoriesTab(name, reveal = false) {
+  const items = await api(`/api/persons/${encodeURIComponent(name)}/memories?reveal=${reveal ? 1 : 0}`);
+  const rows = items.map((m) => el("tr", {},
+    el("td", {}, m.kind || "—"), el("td", {}, m.key || "—"),
+    el("td", {}, reveal ? m.text : m.text, el("div", { class: "muted" }, `lunghezza ${m.text_len ?? (m.text || "").length}`)),
+    el("td", {}, m.status), el("td", {}, m.pinned ? "sì" : "no"), el("td", {}, String(m.seen_count ?? "—")),
+    el("td", {}, fmtTime(m.last_used_at)), el("td", {}, fmtTime(m.expires_ts))));
+  setView(
+    el("p", {}, el("button", { class: "ghost", on: { click: personsTab } }, "← persone"), "  ", el("strong", {}, name)),
+    el("div", { class: "card" }, reveal
+      ? el("span", { class: "warn" }, "Testo visibile: la rivelazione è registrata nell'audit.")
+      : el("span", { class: "muted" }, "Testo nascosto. "),
+      reveal ? null : el("button", { class: "act", on: { click: () => memoriesTab(name, true) } }, "mostra testo")),
+    table(["Tipo", "Chiave", "Testo", "Stato", "Fissata", "Visto", "Ultimo uso", "Scade"], rows));
+}
+
+// ----- notifiche ----------------------------------------------------------
+async function notificationsTab(reveal = false) {
+  const items = await api(`/api/notifications?limit=100&reveal=${reveal ? 1 : 0}`);
+  const rows = items.map((n) => el("tr", {},
+    el("td", {}, fmtTime(n.deliver_at)), el("td", {}, n.target), el("td", {}, n.source),
+    el("td", {}, n.text), el("td", {}, n.cancelled ? "annullata" : (n.expires_at && new Date(n.expires_at) < new Date() ? "scaduta" : "attiva"))));
+  setView(el("div", { class: "card" }, reveal
+      ? el("span", { class: "warn" }, "Testo visibile: la rivelazione è registrata nell'audit.")
+      : el("span", { class: "muted" }, "Il testo dei promemoria personali è nascosto. "),
+      reveal ? null : el("button", { class: "act", on: { click: () => notificationsTab(true) } }, "mostra testo")),
+    table(["Consegna prevista", "Destinatario", "Sorgente", "Testo", "Stato"], rows));
+}
+
+// ----- skill --------------------------------------------------------------
+async function skillsTab() {
+  const skills = await api("/api/skills");
+  const rows = skills.map((s) => el("tr", {},
+    el("td", {}, s.name), el("td", {}, s.type || "—"),
+    el("td", {}, s.enabled ? el("span", { class: "ok" }, "attiva") : el("span", { class: "err" }, "disattivata")),
+    el("td", {}, s.problem || "")));
+  const fileInput = el("input", { type: "file", accept: ".zip,application/zip", id: "zipfile" });
+  const out = el("div", { id: "uploadout" });
+  setView(
+    el("div", { class: "card" },
+      el("strong", {}, "Carica una skill (zip)"),
+      el("p", { class: "muted" }, "Lo zip deve contenere SKILL.md nella radice o in una sola cartella. Sono accettate solo skill di tipo istruzioni o http: quelle con codice vengono rifiutate. Non si sovrascrive una skill esistente."),
+      fileInput, " ",
+      el("button", { class: "act", on: { click: uploadSkill } }, "carica e ricarica"),
+      out),
+    el("p", {}, el("button", { class: "ghost", on: { click: async () => {
+      try { await api("/api/skills/reload", { method: "POST" }); skillsTab(); } catch (e) { out.replaceChildren(errorBox(e)); }
+    } } }, "ricarica skill")),
+    table(["Nome", "Tipo", "Stato", "Problema"], rows));
+}
+
+async function uploadSkill() {
+  const out = $("#uploadout");
+  const file = $("#zipfile").files[0];
+  if (!file) { out.replaceChildren(el("p", { class: "err" }, "Scegli un file zip.")); return; }
+  out.replaceChildren(el("p", { class: "muted" }, "Caricamento in corso..."));
+  try {
+    const r = await api(`/api/skills/upload?filename=${encodeURIComponent(file.name)}`, {
+      method: "POST", headers: { "Content-Type": "application/zip" }, body: file });
+    out.replaceChildren(el("p", { class: "ok" }, `Skill "${r.name}" installata (${r.type}, ${r.files} file). Stato ricarica: ${r.reload}.`));
+  } catch (e) { out.replaceChildren(errorBox(e)); }
+}
+
+// ----- audit ----------------------------------------------------------------
+async function auditTab() {
+  const items = await api("/api/audit?limit=200");
+  const rows = items.map((a) => el("tr", {}, el("td", {}, a.ts), el("td", {}, a.action),
+    el("td", {}, Object.entries(a).filter(([k]) => !["ts", "action"].includes(k)).map(([k, v]) => `${k}=${v}`).join("  "))));
+  setView(table(["Quando", "Azione", "Dettagli"], rows));
+}
+
+// ----- navigazione --------------------------------------------------------
+const tabs = { devices: devicesTab, persons: personsTab, notifications: () => notificationsTab(false),
+               skills: skillsTab, audit: auditTab };
+async function go(name) {
+  for (const b of document.querySelectorAll("#nav button")) b.classList.toggle("on", b.dataset.tab === name);
+  setView(el("p", { class: "muted" }, "Caricamento..."));
+  try { await tabs[name](); } catch (e) { if (e.message !== "token non valido") setView(errorBox(e)); }
+}
+
+document.querySelectorAll("#nav button").forEach((b) => b.addEventListener("click", () => go(b.dataset.tab)));
+$("#savetok").addEventListener("click", () => {
+  token = $("#tok").value.trim();
+  try { sessionStorage.setItem("jarvis-console-token", token); } catch (_) {}
+  $("#login").hidden = true;
+  $("#authbox").textContent = "connesso";
+  go("devices");
+});
+
+if (token) { $("#login").hidden = true; $("#authbox").textContent = "connesso"; go("devices"); }
+else { $("#login").hidden = false; }
+</script>
+</body>
+</html>

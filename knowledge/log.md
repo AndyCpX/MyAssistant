@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-08
+- **Creation**: [console](/agent/console.md): console di diagnostica Python (FastAPI, HTML senza build) su 127.0.0.1:8090: dispositivi, persone, memorie redatte con rivelazione in audit, notifiche, caricamento skill da zip con controlli di sicurezza; endpoint agente `GET /v1/devices`. Verificata con l'agente reale.
 - **Update**: [notifications](/agent/notifications.md): consegna alle schede via Mosquitto (dynamic-security, default deny, un ruolo per scheda), ack dopo riproduzione, token per sorgente e limite di frequenza; verificato nello stack compose con schede simulate. Firmware non ancora aggiornato.
 - **Creation**: [notifications](/agent/notifications.md): servizio eventi `notify/` separato dall'agente (coda SQLite, lease, ack), tool `set_reminder` e polling su agente; test 17/17, firmware non ancora aggiornato.
 - **Update**: [pipeline](/agent/pipeline.md) e [configuration](/agent/configuration.md): TTS locale con Kokoro (kokoro-onnx, voce `if_sara`) come default, ElevenLabs come ripiego (`TTS_ENGINE`); provato in italiano nel container (RTF ~0,15), ripiego verificato.

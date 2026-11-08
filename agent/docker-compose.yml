@@ -48,9 +48,31 @@ services:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mqtt-data:/mosquitto/data   # utenti e ruoli (dynamic-security.json) e sessioni persistenti
     restart: unless-stopped
+  console:
+    # Console di diagnostica (uso personale). Solo localhost: dati personali, accesso con CONSOLE_TOKEN.
+    build: ../console
+    ports:
+      - "127.0.0.1:8090:8090"
+    environment:
+      CONSOLE_TOKEN: ${CONSOLE_TOKEN:?imposta CONSOLE_TOKEN in agent/.env}
+      AGENT_URL: http://agent:8080
+      AGENT_TOKEN: ${AGENT_TOKEN:-}
+      NOTIFY_URL: http://notify:8080
+      NOTIFY_TOKEN: ${NOTIFY_TOKEN:?imposta NOTIFY_TOKEN in agent/.env}
+      SKILLS_DIR: /srv/skills
+      CONSOLE_AUDIT: /data/audit.jsonl
+      CONSOLE_ALLOW_CODE_SKILLS: ${CONSOLE_ALLOW_CODE_SKILLS:-0}   # 1 = ammette skill con codice (rischioso)
+    volumes:
+      - ./skills:/srv/skills        # lettura e scrittura: il caricamento di una skill scrive qui
+      - console-data:/data          # audit log
+    depends_on:
+      - agent
+      - notify
+    restart: unless-stopped
 volumes:
   notify-data:
   mqtt-data:
+  console-data:
   whisper-models:
   fastembed-models:
   speaker-data:
