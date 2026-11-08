@@ -14,3 +14,7 @@ __pycache__/
 
 # Script locale con token di autenticazione
 claude.ps1
+
+# Configurazione personale della skill Home Assistant (dettagli della casa, non pubblica)
+agent/skills/homeassistant-skill/skill.local.yaml
+agent/skills/homeassistant-skill/local/
