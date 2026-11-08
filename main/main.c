@@ -11,6 +11,8 @@
 #include "wakeword.h"
 #include "net.h"
 #include "streamer.h"
+#include "notify.h"
+#include "player.h"
 #include <string.h>
 #include "board.h"
 
@@ -74,6 +76,25 @@ static void show_result(led_strip_handle_t rgb, const sentiment_result_t *r)
     vTaskDelay(pdMS_TO_TICKS(2500));
 }
 
+// Notifica dal servizio (via MQTT): chiede il testo all'agente, la riproduce e la conferma.
+// Senza conferma (errore di rete o riproduzione fallita) il servizio la ripropone: nessuna notifica si perde.
+static void handle_notification(led_strip_handle_t rgb, const char *id)
+{
+    ESP_LOGI(TAG, "notifica %s: chiedo il testo all'agente", id);
+    rgb_fill(rgb, 40, 20, 0);                       // ambra = notifica in corso
+    char audio[64] = {0};
+    esp_err_t err = notify_fetch(id, audio, sizeof audio);
+    if (err == ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(TAG, "notifica %s non destinata a questa scheda o annullata: chiusa", id);
+        notify_ack(id);
+    } else if (err == ESP_OK && player_play_path(audio) == ESP_OK) {
+        notify_ack(id);
+    } else {
+        ESP_LOGW(TAG, "notifica %s non consegnata: sara' riproposta", id);
+    }
+    rgb_fill(rgb, 0, 10, 0);
+}
+
 void app_main(void)
 {
     esp_chip_info_t info;
@@ -91,6 +112,13 @@ void app_main(void)
         streaming = true;
     } else {
         ESP_LOGW(TAG, "streaming sentiment disattivato");
+    }
+
+    if (streaming) {
+        esp_err_t nerr = notify_start();
+        if (nerr == ESP_OK) ESP_LOGI(TAG, "notifiche MQTT attive");
+        else if (nerr == ESP_ERR_INVALID_STATE) ESP_LOGI(TAG, "notifiche MQTT disattivate (SS_MQTT_URI vuoto)");
+        else ESP_LOGW(TAG, "notifiche MQTT non avviate: %s", esp_err_to_name(nerr));
     }
 
     if (audio_init() != ESP_OK || wakeword_start(on_wake) != ESP_OK) {
@@ -121,6 +149,10 @@ void app_main(void)
             s_has_result = false;
             s_wake = false;
             rgb_fill(rgb, 0, 10, 0);
+        }
+        char pending[40];
+        if (!s_wake && notify_next(pending, sizeof pending)) {
+            handle_notification(rgb, pending);
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }

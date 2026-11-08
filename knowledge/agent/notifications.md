@@ -54,7 +54,8 @@ Dettagli del broker, utenti e ruoli: [mosquitto/README.md](/agent/mosquitto/READ
 - Servizio notify: implementato, 27 test (API, coda, MQTT con client finto).
 - Broker: verificato nello stack compose con schede simulate (paho).
 - Agente: tool, speak e promemoria personali implementati; non ancora provati con il modello reale né con il container dell'agente aggiornato.
-- Firmware: client MQTT non ancora implementato.
+- Firmware: implementato in `main/notify.c` (client `espressif/mqtt`, coda da 4 id, richiesta `speak`, riproduzione con `player_play_path`, conferma su `jarvis/ack/<id>`). Verificato su hardware (COM3): notifica ricevuta, testo e audio scaricati dall'agente (2,6 s di audio), conferma registrata dal servizio.
+- Configurazione scheda: `SS_DEVICE_ID`, `SS_MQTT_URI`, `SS_MQTT_PASSWORD` (sdkconfig.local, non versionato). Senza `SS_MQTT_URI` le notifiche restano disattivate e la scheda funziona come prima.
 
 ## Limiti noti
 - Notifiche per persona consegnate solo a voce riconosciuta; nessun canale per chi non parla.

@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-08
+- **Update**: [notifications](/agent/notifications.md): firmware con client MQTT (`main/notify.c`) per le notifiche; verificato su hardware con una notifica di prova dal servizio notify: ricevuta, riprodotta, confermata. Password di prova ancora in `sdkconfig.local` locale da cambiare.
 - **Creation**: [console](/agent/console.md): console di diagnostica Python (FastAPI, HTML senza build) su 127.0.0.1:8090: dispositivi, persone, memorie redatte con rivelazione in audit, notifiche, caricamento skill da zip con controlli di sicurezza; endpoint agente `GET /v1/devices`. Verificata con l'agente reale.
 - **Update**: [notifications](/agent/notifications.md): consegna alle schede via Mosquitto (dynamic-security, default deny, un ruolo per scheda), ack dopo riproduzione, token per sorgente e limite di frequenza; verificato nello stack compose con schede simulate. Firmware non ancora aggiornato.
 - **Creation**: [notifications](/agent/notifications.md): servizio eventi `notify/` separato dall'agente (coda SQLite, lease, ack), tool `set_reminder` e polling su agente; test 17/17, firmware non ancora aggiornato.

@@ -19,6 +19,24 @@ menu "Smart Speaker"
         string "Bearer token per il servizio (vuoto = nessuno)"
         default ""
 
+    config SS_DEVICE_ID
+        string "Identificativo della scheda (topic MQTT e target delle notifiche)"
+        default "kitchen"
+        help
+            Deve coincidere con l'utente MQTT creato sul broker e con NOTIFY_DEVICES nell'agente.
+
+    config SS_MQTT_URI
+        string "Broker MQTT per le notifiche (es. mqtt://192.168.1.36:1883)"
+        default ""
+        help
+            Vuoto = notifiche disattivate. Va messo in sdkconfig.local (non versionato).
+
+    config SS_MQTT_PASSWORD
+        string "Password MQTT della scheda"
+        default ""
+        help
+            Password dell'utente della scheda sul broker. Va messa in sdkconfig.local, mai nel repo.
+
     config SS_VOLUME
         int "Volume dello speaker (0-100)"
         range 0 100

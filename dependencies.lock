@@ -114,6 +114,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 3.1.1
+  espressif/mqtt:
+    component_hash: fb18bc3b65aa8c94693a9811ffc322cca8a65d92d5ec84983d3e385080e3969c
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.0
   idf:
     source:
       type: idf
@@ -122,7 +132,8 @@ direct_dependencies:
 - espressif/esp-sr
 - espressif/esp_codec_dev
 - espressif/led_strip
+- espressif/mqtt
 - idf
-manifest_hash: e0a0d7fc8b515710f23fae31be5b29d223f14f822d9996636c24033a5af73abe
+manifest_hash: baadf6a6ff00239e418ca72ac93e8d3bbf946bada95c60fe9e6b131ef68a0bc9
 target: esp32s3
 version: 3.0.0
